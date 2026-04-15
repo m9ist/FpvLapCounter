@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# App logs
+app.log
+
+# FPV result files (generated, not source)
+*.fpv.json
+
+# Model cache (large files downloaded at runtime)
+# HuggingFace
+.cache/
+~/.cache/huggingface/
+
+# OpenCLIP / torch hub cache (usually in user profile, not project)
+# but exclude if someone puts them here
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Video files (large media, not committed)
+*.ts
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Images (reference frames if stored locally)
+# Uncomment if you don't want to commit reference images:
+# *.jpg
+# *.jpeg
+# *.png
+
+# Output / exports
+output/
+*.csv
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit
+.streamlit/secrets.toml

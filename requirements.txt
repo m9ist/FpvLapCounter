@@ -1,0 +1,8 @@
+opencv-python>=4.8.0
+numpy>=1.24.0
+easyocr>=1.7.0
+scipy>=1.11.0
+rich>=13.0.0        # красивый вывод в консоль
+typer>=0.9.0        # CLI
+openai>=1.0.0       # LM Studio совместим с OpenAI API
+pillow>=10.0.0
