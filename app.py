@@ -19,7 +19,7 @@ from core.osd_reader import OSDReader, OSDRegion, DEFAULT_REGION
 from core.lap_analyzer import Pass, analyze
 from storage import project as proj
 from storage.project import ProjectData, PassData, LapData
-from storage.references import RefImage, from_frame
+from storage.references import RefImage, from_frame, save_ref_to_history
 from ui.sidebar import render_sidebar
 from ui.video_list import render_video_list
 from ui.graph_tab import render_graph_tab
@@ -354,6 +354,7 @@ with content_col:
     def on_use_as_ref(bgr_frame: np.ndarray):
         ref = from_frame(bgr_frame, label=f"{active_video['name']} кадр")
         st.session_state.setdefault("sidebar_refs", []).append(ref)
+        save_ref_to_history(ref)
         st.toast("✅ Кадр добавлен как референс")
 
     def on_set_osd_region(region: OSDRegion):

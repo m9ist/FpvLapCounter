@@ -8,7 +8,10 @@ import subprocess
 import streamlit as st
 
 from core.models import MODELS, DEFAULT_MODEL
-from storage.references import RefImage, from_file, from_clipboard
+from storage.references import (
+    RefImage, from_file, from_clipboard,
+    save_ref_to_history, load_ref_history,
+)
 
 
 def _pick_folder_dialog() -> str | None:
@@ -127,6 +130,7 @@ def render_sidebar() -> dict:
                         ref = from_file(uf)
                         st.session_state["sidebar_refs"].append(ref)
                         existing_names.add(uf.name)
+                        save_ref_to_history(ref)
                     except Exception as exc:
                         st.warning(f"Не удалось загрузить {uf.name}: {exc}")
 
@@ -136,6 +140,7 @@ def render_sidebar() -> dict:
                 st.warning("В буфере обмена нет изображения.")
             else:
                 st.session_state["sidebar_refs"].append(ref)
+                save_ref_to_history(ref)
                 st.success(f"Добавлен кадр из буфера: {ref.name}")
 
         # Display current refs as thumbnails
@@ -163,6 +168,28 @@ def render_sidebar() -> dict:
                 st.rerun()
         else:
             st.caption("Нет загруженных референсов")
+
+        # ── Reference history ──────────────────────────────────────────
+        history = load_ref_history()
+        if history:
+            with st.expander(f"📂 История ({len(history)} сохр.)"):
+                active_refs = st.session_state["sidebar_refs"]
+                cols_h = 3
+                for row_start in range(0, len(history), cols_h):
+                    row = history[row_start : row_start + cols_h]
+                    h_cols = st.columns(cols_h)
+                    for col_i, href in enumerate(row):
+                        hist_idx = row_start + col_i
+                        with h_cols[col_i]:
+                            try:
+                                st.image(href.thumbnail_rgb(), width='stretch')
+                            except Exception:
+                                st.text("—")
+                            st.caption(href.name[:12])
+                            if st.button("＋", key=f"hist_add_{hist_idx}",
+                                         width='stretch', help="Добавить в референсы"):
+                                st.session_state["sidebar_refs"].append(href)
+                                st.rerun()
 
         st.markdown("---")
 

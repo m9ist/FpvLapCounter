@@ -4,12 +4,44 @@
 """
 import base64
 import io
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import cv2
 from PIL import Image
 from dataclasses import dataclass
 
 THUMB_SIZE = (224, 224)  # for display and storage
+
+# Persistent history folder — sits next to the project root
+REFS_DIR = Path(__file__).resolve().parent.parent / "refs"
+
+
+def save_ref_to_history(ref: "RefImage") -> Path:
+    """Save a reference image as JPEG into REFS_DIR and return the path."""
+    REFS_DIR.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in ref.name)[:40]
+    fpath = REFS_DIR / f"{ts}_{safe}.jpg"
+    cv2.imwrite(str(fpath), ref.bgr)
+    return fpath
+
+
+def load_ref_history() -> list["RefImage"]:
+    """Load all JPEG files from REFS_DIR, newest first."""
+    if not REFS_DIR.exists():
+        return []
+    result = []
+    for fpath in sorted(REFS_DIR.glob("*.jpg"), reverse=True):
+        bgr = cv2.imread(str(fpath))
+        if bgr is not None:
+            # Strip timestamp prefix for display name
+            stem = fpath.stem
+            parts = stem.split("_", 2)
+            display = parts[2] if len(parts) == 3 else stem
+            result.append(RefImage(name=display, bgr=bgr))
+    return result
 
 @dataclass(eq=False)
 class RefImage:

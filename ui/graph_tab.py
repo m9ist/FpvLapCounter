@@ -273,14 +273,17 @@ def _render_plotly_graph(
 
     event = st.plotly_chart(fig, width='stretch', key=f"graph_{sk_frame}", on_select="rerun")
 
-    # Handle click → jump to frame
+    # Handle click → jump to frame (works for both raw signal and pass-star markers)
     if event and hasattr(event, "selection") and event.selection:
         pts = event.selection.get("points", [])
         if pts:
             clicked_x = pts[0].get("x")
             if clicked_x is not None:
-                frame_idx = int(float(clicked_x) * fps)
+                t = float(clicked_x)
+                frame_idx = int(t * fps)
                 st.session_state[sk_frame] = frame_idx
+                # Also sync the time slider so it jumps to the right position
+                st.session_state[f"time_slider_{sk_frame}"] = t
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +313,13 @@ def _render_frame_viewer(
     current_frame: int = int(st.session_state.get(sk_frame, 0))
     current_frame = max(0, min(current_frame, total_frames - 1))
 
+    max_sec = (total_frames - 1) / fps if fps > 0 else 0.0
+    sk_slider = f"time_slider_{sk_frame}"
+
+    # Initialise slider session-state key (only on first render)
+    if sk_slider not in st.session_state:
+        st.session_state[sk_slider] = current_frame / fps if fps > 0 else 0.0
+
     # ── Navigation buttons ─────────────────────────────────────────────
     nav_cols = st.columns(8)
     deltas = [-10, -5, -2, -1, 1, 2, 5, 10]
@@ -317,25 +327,25 @@ def _render_frame_viewer(
         label = f"{delta:+d}"
         with col:
             if st.button(label, key=f"nav_{sk_frame}_{delta}", width='stretch'):
-                current_frame = max(0, min(current_frame + delta, total_frames - 1))
-                st.session_state[sk_frame] = current_frame
+                new_f = max(0, min(current_frame + delta, total_frames - 1))
+                current_frame = new_f
+                st.session_state[sk_frame] = new_f
+                # Sync slider — must update its own session-state key
+                st.session_state[sk_slider] = new_f / fps if fps > 0 else 0.0
 
     # ── Time slider ────────────────────────────────────────────────────
-    max_sec = (total_frames - 1) / fps if fps > 0 else 0.0
-    current_sec = current_frame / fps if fps > 0 else 0.0
-
+    # No value= parameter: Streamlit reads from st.session_state[sk_slider]
     new_sec = st.slider(
         "Время (сек)",
         min_value=0.0,
         max_value=float(max_sec),
-        value=float(current_sec),
         step=1.0 / fps if fps > 0 else 0.033,
         format="%.2f",
-        key=f"time_slider_{sk_frame}",
+        key=sk_slider,
     )
     # Sync slider → frame index
-    new_frame_from_slider = int(new_sec * fps)
-    new_frame_from_slider = max(0, min(new_frame_from_slider, total_frames - 1))
+    # Use round() not int(): int(1910/30*30) = int(1909.9999…) = 1909, off by one!
+    new_frame_from_slider = max(0, min(round(new_sec * fps), total_frames - 1))
     if new_frame_from_slider != current_frame:
         current_frame = new_frame_from_slider
         st.session_state[sk_frame] = current_frame

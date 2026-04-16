@@ -15,16 +15,80 @@ from storage.project import PassData
 
 _CACHE_LIMIT = 200
 
-_CARD_VERIFIED_CSS = """
-<style>
-.card-ok   { border: 3px solid #28a745; background-color: rgba(40,167,69,0.12);
-             border-radius: 8px; padding: 4px; margin-bottom: 4px; }
-.card-bad  { border: 3px solid #dc3545; background-color: rgba(220,53,69,0.10);
-             border-radius: 8px; padding: 4px; margin-bottom: 4px; }
-.card-none { border: 3px solid #6c757d; background-color: transparent;
-             border-radius: 8px; padding: 4px; margin-bottom: 4px; }
-</style>
-"""
+
+def _build_css(passes: list) -> str:
+    """Build one <style> block with all per-card rules.
+
+    Card border rule:
+      Target the innermost stVerticalBlock containing the anchor span using
+      :not(:has(child stVerticalBlock that also has the same span)).
+
+    Button color rules:
+      Same innermost-stVerticalBlock trick but scoped to each btn sub-column.
+      The marker span is placed inside btn_col1 / btn_col2; its paragraph
+      container is collapsed to zero height so it doesn't affect layout.
+    """
+    rules: list[str] = []
+
+    color_map = {
+        True:  ("#28a745", "rgba(40,167,69,0.12)"),
+        False: ("#dc3545", "rgba(220,53,69,0.10)"),
+        None:  ("#6c757d", "transparent"),
+    }
+
+    for i, p in enumerate(passes):
+        anchor  = f"card-anchor-{i}"
+        ok_mid  = f"vok-m-{i}"
+        bad_mid = f"vbad-m-{i}"
+
+        border_color, bg_color = color_map[p.verified]
+
+        # ── Card border ───────────────────────────────────────────────
+        # Innermost stVerticalBlock = the one that contains the anchor but
+        # has NO child stVerticalBlock that also contains the anchor.
+        card_sel = (
+            f'div[data-testid="stVerticalBlock"]:has(span#{anchor})'
+            f':not(:has(div[data-testid="stVerticalBlock"]:has(span#{anchor})))'
+        )
+        rules.append(
+            f'{card_sel}{{'
+            f'border:3px solid {border_color}!important;'
+            f'background-color:{bg_color}!important;'
+            f'border-radius:8px!important;'
+            f'padding:6px!important;'
+            f'margin-bottom:4px!important}}'
+        )
+
+        # ── Collapse the marker-span paragraph so it takes no space ──
+        for mid in (ok_mid, bad_mid):
+            rules.append(
+                f'div[data-testid="stMarkdownContainer"]:has(span#{mid})'
+                f'{{line-height:0!important;margin:0!important;padding:0!important}}'
+                f'div[data-testid="stMarkdownContainer"]:has(span#{mid}) p'
+                f'{{margin:0!important;padding:0!important;line-height:0!important;'
+                f'height:0!important;overflow:hidden!important}}'
+            )
+
+        # ── Button colours ────────────────────────────────────────────
+        def _btn_rules(mid: str, bg: str, bg_hover: str) -> str:
+            # Innermost stVerticalBlock for the button sub-column
+            sel = (
+                f'div[data-testid="stVerticalBlock"]:has(span#{mid})'
+                f':not(:has(div[data-testid="stVerticalBlock"]:has(span#{mid})))'
+                f' button'
+            )
+            return (
+                f'{sel}{{background-color:{bg}!important;'
+                f'border-color:{bg}!important;color:#fff!important}}'
+                f'{sel}:hover{{background-color:{bg_hover}!important}}'
+            )
+
+        if p.verified is True:
+            rules.append(_btn_rules(ok_mid, "#28a745", "#218838"))
+        if p.verified is False:
+            rules.append(_btn_rules(bad_mid, "#dc3545", "#c82333"))
+
+    return f'<style>{"".join(rules)}</style>' if rules else ''
 
 
 def _load_frame(video_path: str, frame_idx: int, frames_cache: dict) -> np.ndarray | None:
@@ -79,7 +143,9 @@ def render_verify_tab(
     on_verified_change : Callback(pass_idx, True|False|None) when user changes status.
     on_use_as_ref      : Callback(bgr_frame) when user wants to use frame as reference.
     """
-    st.markdown(_CARD_VERIFIED_CSS, unsafe_allow_html=True)
+    # Inject all CSS in a single top-level call (before any columns).
+    # Style tags placed inside st.columns() can behave inconsistently.
+    st.markdown(_build_css(passes), unsafe_allow_html=True)
 
     if not passes:
         st.info("Нет обнаруженных пролётов для верификации. Запустите анализ.")
@@ -132,15 +198,13 @@ def _render_pass_card(
 ) -> None:
     """Render a single verification card inside a Streamlit column."""
     with col:
-        # Determine card border class based on verified state
-        if pass_data.verified is True:
-            css_class = "card-ok"
-        elif pass_data.verified is False:
-            css_class = "card-bad"
-        else:
-            css_class = "card-none"
-
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        # Anchor span — CSS in render_verify_tab targets the stVerticalBlock
+        # that contains this span (and only this span) to draw the card border.
+        anchor_id = f"card-anchor-{pass_idx}"
+        st.markdown(
+            f'<span id="{anchor_id}" style="display:none"></span>',
+            unsafe_allow_html=True,
+        )
 
         # Thumbnail
         frame_bgr = _load_frame(video_path, pass_data.frame, frames_cache)
@@ -171,9 +235,16 @@ def _render_pass_card(
         else:
             st.info("⬜ Не проверен", icon=None)
 
-        # Action buttons
+        # Action buttons — each btn sub-column gets a hidden marker span so
+        # CSS can scope the button colour to exactly that column.
         btn_col1, btn_col2, btn_col3 = st.columns(3)
+
         with btn_col1:
+            # Marker for ✅ colour rule; paragraph is collapsed to zero by CSS.
+            st.markdown(
+                f'<span id="vok-m-{pass_idx}" style="display:none"></span>',
+                unsafe_allow_html=True,
+            )
             ok_type = "primary" if pass_data.verified is True else "secondary"
             if st.button("✅", key=f"vok_{pass_idx}", width='stretch',
                          type=ok_type, help="Подтвердить пролёт"):
@@ -182,6 +253,11 @@ def _render_pass_card(
                 st.rerun()
 
         with btn_col2:
+            # Marker for ❌ colour rule.
+            st.markdown(
+                f'<span id="vbad-m-{pass_idx}" style="display:none"></span>',
+                unsafe_allow_html=True,
+            )
             bad_type = "primary" if pass_data.verified is False else "secondary"
             if st.button("❌", key=f"vbad_{pass_idx}", width='stretch',
                          type=bad_type, help="Отметить как фейк"):
@@ -195,5 +271,3 @@ def _render_pass_card(
                 if frame_bgr is not None:
                     on_use_as_ref(frame_bgr)
                     st.success("Добавлен как референс")
-
-        st.markdown("</div>", unsafe_allow_html=True)
