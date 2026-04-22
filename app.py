@@ -127,6 +127,27 @@ def project_data_to_passes(data: ProjectData) -> list[Pass]:
     ]
 
 
+def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) -> None:
+    """Запускает анализ списка видео с общим прогресс-баром."""
+    total = len(videos_to_process)
+    if total == 0:
+        return
+
+    status = st.empty()
+    bar = st.progress(0)
+
+    for i, v in enumerate(videos_to_process):
+        status.markdown(f"**Файл {i + 1} из {total}:** `{v['name']}`")
+        bar.progress(i / total)
+        try:
+            run_analysis(v, cfg, refs)
+        except Exception as e:
+            st.error(f"{v['name']}: {e}")
+
+    bar.progress(1.0)
+    status.success(f"✅ Готово: обработано {total} из {total} файлов")
+
+
 def run_analysis(video: dict, cfg: dict, refs: list[RefImage]) -> None:
     """Запускает полный анализ одного видео и сохраняет результат."""
     video_path = video["path"]
@@ -277,11 +298,7 @@ with top_cols[1]:
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот")
         elif st.button(f"🚀 Обработать ({len(unprocessed)})", type="primary", width='stretch'):
-            for v in unprocessed:
-                try:
-                    run_analysis(v, cfg, refs)
-                except Exception as e:
-                    st.error(f"{v['name']}: {e}")
+            run_batch(unprocessed, cfg, refs)
             st.rerun()
 
 
@@ -315,11 +332,7 @@ with list_col:
                 st.session_state["timestamps"].pop(v["path"], None)
                 st.session_state["frames_cache"].pop(v["path"], None)
             # Запускаем анализ
-            for v in selected:
-                try:
-                    run_analysis(v, cfg, refs)
-                except Exception as e:
-                    st.error(f"{v['name']}: {e}")
+            run_batch(selected, cfg, refs)
             st.rerun()
 
     if new_active != st.session_state["active_idx"]:
