@@ -10,7 +10,6 @@ import streamlit as st
 _STATUS_BADGE = {
     "new": "⬜ новый",
     "processing": "🔄 ...",
-    "no_laps": "⚠️ нет кругов",
 }
 
 _ACTIVE_STYLE = (
@@ -32,11 +31,30 @@ div[data-testid="stVerticalBlock"] .video-list-btn button {
 """
 
 
+def _verify_badge(video: dict) -> str:
+    """Return a short verification-status suffix for the video label.
+
+    Returns:
+      '· 🔍✓'        — all passes reviewed (verified True or False, none pending)
+      '· ❓N'         — N passes still pending review
+      ''              — no analysis data yet
+    """
+    data = video.get("data")
+    if not data or not data.passes:
+        return ""
+    pending = sum(1 for p in data.passes if p.verified is None)
+    if pending == 0:
+        return " · 🔍✓"
+    return f" · ❓{pending}"
+
+
 def _status_label(video: dict) -> str:
     status = video.get("status", "new")
     if status == "done":
         n = video.get("lap_count", 0)
-        return f"✅ {n} кругов"
+        return f"✅ {n} кругов{_verify_badge(video)}"
+    if status == "no_laps":
+        return f"⚠️ нет кругов{_verify_badge(video)}"
     return _STATUS_BADGE.get(status, status)
 
 
