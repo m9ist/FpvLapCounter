@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 
 import pandas as pd
 import streamlit as st
@@ -205,6 +206,7 @@ def render_compare_tab(
             f"Лучшие {best_n}": best_n_str,
             f"Avg {best_n}": best_n_avg_str,
             "Средний": avg_str,
+            "_path": video_path,
             "_best_lap_sec": best_lap_sec,
             "_best_n_total": best_n_total,
         })
@@ -266,3 +268,19 @@ def render_compare_tab(
             "Кругов": st.column_config.NumberColumn(width="small"),
         },
     )
+
+    # ── Open in player buttons ─────────────────────────────────────────
+    # st.dataframe cells don't support buttons; render them below the
+    # table in the same sorted order so rank is visually preserved.
+    st.markdown("**▶ Открыть в плеере:**")
+    btn_cols = st.columns(max(len(rows), 1))
+    for i, (row, col) in enumerate(zip(rows, btn_cols)):
+        # Strip medal prefix that was added to df_display copy
+        short = row["Видео"][:25]
+        with col:
+            if st.button(short, key=f"open_video_{i}", width='stretch',
+                         help=row["_path"]):
+                try:
+                    os.startfile(row["_path"])
+                except Exception as exc:
+                    st.error(f"Не удалось открыть файл: {exc}")
