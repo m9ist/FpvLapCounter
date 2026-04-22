@@ -152,11 +152,16 @@ def render_verify_tab(
         return
 
     # ── Bulk action buttons ────────────────────────────────────────────
-    col_all, col_reset = st.columns(2)
+    col_all, col_fake, col_reset = st.columns(3)
     with col_all:
         if st.button("✅ Подтвердить все", key="verify_all_btn", width='stretch'):
             for i in range(len(passes)):
                 on_verified_change(i, True)
+            st.rerun()
+    with col_fake:
+        if st.button("❌ Все — фейк", key="verify_all_fake_btn", width='stretch'):
+            for i in range(len(passes)):
+                on_verified_change(i, False)
             st.rerun()
     with col_reset:
         if st.button("🔄 Сбросить верификацию", key="verify_reset_btn", width='stretch'):
