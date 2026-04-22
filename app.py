@@ -20,6 +20,7 @@ from core.lap_analyzer import Pass, analyze
 from storage import project as proj
 from storage.project import ProjectData, PassData, LapData
 from storage.references import RefImage, from_frame, save_ref_to_history
+from storage import model_stats
 from ui.sidebar import render_sidebar
 from ui.video_list import render_video_list
 from ui.graph_tab import render_graph_tab
@@ -224,6 +225,7 @@ def run_analysis(video: dict, cfg: dict, refs: list[RefImage]) -> None:
     )
 
     proj.save(data, video_path)
+    model_stats.increment(cfg["model_key"])
     video["data"] = data
     video["status"] = "done" if laps_data else "no_laps"
     video["lap_count"] = len(laps_data)

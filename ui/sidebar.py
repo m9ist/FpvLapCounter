@@ -8,6 +8,7 @@ import subprocess
 import streamlit as st
 
 from core.models import MODELS, DEFAULT_MODEL
+from storage import model_stats
 from storage.references import (
     RefImage, from_file, from_clipboard,
     save_ref_to_history, load_ref_history,
@@ -196,7 +197,14 @@ def render_sidebar() -> dict:
         # ── Model selector ─────────────────────────────────────────────
         st.subheader("🧠 Модель")
         model_keys = list(MODELS.keys())
-        model_labels = {k: f"{MODELS[k].name} — {MODELS[k].description}" for k in model_keys}
+        usage = model_stats.load()
+        model_labels = {
+            k: (
+                f"{MODELS[k].name} — {MODELS[k].description}"
+                + (f"  [{usage[k]} видео]" if usage.get(k) else "")
+            )
+            for k in model_keys
+        }
 
         try:
             current_model_idx = model_keys.index(st.session_state["sidebar_model_key"])
