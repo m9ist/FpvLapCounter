@@ -7,6 +7,9 @@ FPV Lap Counter
 from utils.logger import setup as _setup_logging
 _setup_logging()
 
+import threading
+import time
+
 import streamlit as st
 import numpy as np
 import cv2
@@ -46,6 +49,10 @@ div[data-testid="column"] { padding: 0 4px; }
 
 # ── Session state init ─────────────────────────────────────────────────────────
 
+class _StopAnalysis(Exception):
+    """Raised inside run_analysis when stop_event is set."""
+
+
 def _init_state():
     defaults = {
         "videos": [],           # list of video dicts
@@ -56,6 +63,13 @@ def _init_state():
         "frames_cache": {},     # video_path -> {frame_idx: bgr}
         "similarities": {},     # video_path -> np.ndarray
         "timestamps": {},       # video_path -> np.ndarray
+        # ── Analysis state ──────────────────────────────────────────────
+        "analysis_running": False,
+        "analysis_stop": None,      # threading.Event | None
+        "analysis_status": "",      # human-readable status line
+        "analysis_progress": 0.0,   # outer: file N of M  (0..1)
+        "analysis_inner": 0.0,      # inner: frame progress (0..1)
+        "analysis_errors": [],      # list[str]
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -128,39 +142,80 @@ def project_data_to_passes(data: ProjectData) -> list[Pass]:
 
 
 def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) -> None:
-    """Запускает анализ списка видео с общим прогресс-баром."""
+    """Запускает анализ списка видео в фоновом потоке.
+
+    Обновляет session_state (не st.*) — основной поток читает его в polling loop.
+    Детектор и OSD-ридер прогреваются в основном потоке до старта потока,
+    чтобы избежать вызовов st.spinner() из фонового потока.
+    """
     total = len(videos_to_process)
     if total == 0:
         return
 
-    status = st.empty()
-    bar = st.progress(0)
+    # Прогрев тяжёлых объектов в основном потоке (со спиннерами)
+    get_detector(cfg["model_key"])
+    get_osd_reader()
 
-    for i, v in enumerate(videos_to_process):
-        status.markdown(f"**Файл {i + 1} из {total}:** `{v['name']}`")
-        bar.progress(i / total)
-        try:
-            run_analysis(v, cfg, refs)
-        except Exception as e:
-            st.error(f"{v['name']}: {e}")
+    stop_event = threading.Event()
+    st.session_state["analysis_stop"] = stop_event
+    st.session_state["analysis_running"] = True
+    st.session_state["analysis_progress"] = 0.0
+    st.session_state["analysis_inner"] = 0.0
+    st.session_state["analysis_status"] = f"Запуск анализа ({total} файлов)…"
+    st.session_state["analysis_errors"] = []
 
-    bar.progress(1.0)
-    status.success(f"✅ Готово: обработано {total} из {total} файлов")
+    def _worker():
+        for i, v in enumerate(videos_to_process):
+            if stop_event.is_set():
+                st.session_state["analysis_status"] = f"⏹ Остановлено на файле {i + 1} из {total}"
+                break
+            st.session_state["analysis_status"] = f"Файл {i + 1} из {total}: {v['name']}"
+            st.session_state["analysis_progress"] = i / total
+            st.session_state["analysis_inner"] = 0.0
+            try:
+                run_analysis(v, cfg, refs, stop_event=stop_event,
+                             on_inner_progress=lambda p: st.session_state.__setitem__("analysis_inner", p))
+            except _StopAnalysis:
+                st.session_state["analysis_status"] = f"⏹ Остановлено: {v['name']}"
+                break
+            except Exception as exc:
+                st.session_state["analysis_errors"] = (
+                    st.session_state.get("analysis_errors", []) + [f"{v['name']}: {exc}"]
+                )
+        else:
+            st.session_state["analysis_progress"] = 1.0
+            st.session_state["analysis_status"] = f"✅ Готово: обработано {total} из {total} файлов"
+
+        st.session_state["analysis_running"] = False
+
+    t = threading.Thread(target=_worker, daemon=True, name="fpv-analysis")
+    t.start()
 
 
-def run_analysis(video: dict, cfg: dict, refs: list[RefImage]) -> None:
-    """Запускает полный анализ одного видео и сохраняет результат."""
+def run_analysis(
+    video: dict,
+    cfg: dict,
+    refs: list[RefImage],
+    stop_event: threading.Event | None = None,
+    on_inner_progress=None,          # callable(float 0‥1) | None
+) -> None:
+    """Запускает полный анализ одного видео и сохраняет результат.
+
+    stop_event      — если установлен, прерывает анализ через _StopAnalysis.
+    on_inner_progress — вызывается с долей выполнения (0..1) для каждого кадра.
+    """
     video_path = video["path"]
     det = get_detector(cfg["model_key"])
 
     # Устанавливаем референсы
     det.set_references([r.bgr for r in refs])
 
-    # Прогресс
-    progress = st.progress(0, text=f"Анализ {video['name']}...")
-
     def progress_cb(cur, total):
-        progress.progress(min(cur / total, 1.0), text=f"{video['name']}: {int(cur/total*100)}%")
+        if stop_event and stop_event.is_set():
+            raise _StopAnalysis()
+        pct = min(cur / total, 1.0)
+        if on_inner_progress:
+            on_inner_progress(pct)
 
     # Similarity
     ts, sims, fps = det.compute_similarities(
@@ -168,7 +223,6 @@ def run_analysis(video: dict, cfg: dict, refs: list[RefImage]) -> None:
         sample_every=cfg["sample_every"],
         progress_cb=progress_cb,
     )
-    progress.empty()
 
     # Кешируем для графика
     st.session_state["similarities"][video_path] = sims
@@ -287,6 +341,29 @@ if not videos:
     st.stop()
 
 
+# ── Прогресс анализа (polling, пока фоновый поток работает) ──────────────────
+
+if st.session_state.get("analysis_running"):
+    with st.container(border=True):
+        col_info, col_stop = st.columns([5, 1])
+        with col_info:
+            st.markdown(f"**{st.session_state.get('analysis_status', '')}**")
+            st.progress(st.session_state.get("analysis_progress", 0.0),
+                        text="Файлы")
+            inner = st.session_state.get("analysis_inner", 0.0)
+            if inner > 0:
+                st.progress(inner, text="Кадры")
+        with col_stop:
+            if st.button("🛑 Стоп", key="stop_analysis_btn", width='stretch'):
+                stop_ev = st.session_state.get("analysis_stop")
+                if stop_ev:
+                    stop_ev.set()
+        for err in st.session_state.get("analysis_errors", []):
+            st.error(err)
+    time.sleep(0.5)
+    st.rerun()
+
+
 # ── Кнопка "Обработать выбранные" ────────────────────────────────────────────
 
 selected = [v for v in videos if v["selected"]]
@@ -299,7 +376,7 @@ with top_cols[1]:
             st.warning("⚠️ Добавь референсные кадры ворот")
         elif st.button(f"🚀 Обработать ({len(unprocessed)})", type="primary", width='stretch'):
             run_batch(unprocessed, cfg, refs)
-            st.rerun()
+            st.rerun()  # войти в polling loop
 
 
 # ── Основной layout: список видео + контент ───────────────────────────────────
@@ -331,9 +408,9 @@ with list_col:
                 st.session_state["similarities"].pop(v["path"], None)
                 st.session_state["timestamps"].pop(v["path"], None)
                 st.session_state["frames_cache"].pop(v["path"], None)
-            # Запускаем анализ
+            # Запускаем анализ (поток стартует, polling loop подхватит)
             run_batch(selected, cfg, refs)
-            st.rerun()
+            st.rerun()  # войти в polling loop
 
     if new_active != st.session_state["active_idx"]:
         st.session_state["active_idx"] = new_active
