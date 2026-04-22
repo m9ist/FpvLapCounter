@@ -147,6 +147,51 @@ def render_verify_tab(
     # Style tags placed inside st.columns() can behave inconsistently.
     st.markdown(_build_css(passes), unsafe_allow_html=True)
 
+    # ── Floating scroll buttons ────────────────────────────────────────
+    # st.markdown innerHTML never executes <script> tags (browser security).
+    # st.components.v1.html() renders an iframe where JS *does* run.
+    # From the iframe we reach window.parent.document to inject buttons
+    # directly into the Streamlit page and scroll section.stMain.
+    st.components.v1.html("""
+<script>
+(function () {
+    var doc = window.parent.document;
+    if (doc.getElementById('fpv-scroll-top')) return;
+
+    var style = doc.createElement('style');
+    style.textContent = [
+        '.fpv-scroll-btn{position:fixed;right:24px;z-index:99999;',
+        'width:42px;height:42px;border-radius:50%;border:none;',
+        'cursor:pointer;font-size:20px;color:#fff;background:#1f77b4;',
+        'box-shadow:0 2px 8px rgba(0,0,0,.45);',
+        'display:flex;align-items:center;justify-content:center;',
+        'opacity:.8;transition:opacity .2s,transform .15s}',
+        '.fpv-scroll-btn:hover{opacity:1;transform:scale(1.12)}'
+    ].join('');
+    doc.head.appendChild(style);
+
+    function doScroll(toBottom) {
+        var el = doc.querySelector('section.stMain');
+        if (el) el.scrollTo({top: toBottom ? 999999 : 0, behavior: 'smooth'});
+    }
+
+    function btn(id, bottom, label, toBottom) {
+        var b = doc.createElement('button');
+        b.id = id;
+        b.className = 'fpv-scroll-btn';
+        b.style.bottom = bottom;
+        b.title = label;
+        b.textContent = toBottom ? '\u2193' : '\u2191';
+        b.addEventListener('click', function () { doScroll(toBottom); });
+        doc.body.appendChild(b);
+    }
+
+    btn('fpv-scroll-top', '78px', '\u041d\u0430\u0432\u0435\u0440\u0445', false);
+    btn('fpv-scroll-bot', '26px', '\u0412\u043d\u0438\u0437',  true);
+}());
+</script>
+""", height=0)
+
     if not passes:
         st.info("Нет обнаруженных пролётов для верификации. Запустите анализ.")
         return
