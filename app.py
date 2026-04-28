@@ -142,22 +142,24 @@ def project_data_to_passes(data: ProjectData) -> list[Pass]:
 def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) -> None:
     """Запускает анализ списка видео в фоновом потоке.
 
-    Обновляет session_state (не st.*) — основной поток читает его в polling loop.
-    Детектор и OSD-ридер прогреваются в основном потоке до старта потока,
-    чтобы избежать вызовов st.spinner() из фонового потока.
+    Все обращения к session_state делаются в основном потоке до старта потока.
+    Рабочий поток получает Python-объекты напрямую через замыкание.
     """
     total = len(videos_to_process)
     if total == 0:
         return
 
-    # Прогрев тяжёлых объектов в основном потоке (со спиннерами)
-    get_detector(cfg["model_key"])
-    get_osd_reader()
+    # Прогрев тяжёлых объектов в основном потоке (со спиннерами),
+    # захватываем прямые ссылки — поток не должен трогать session_state.
+    det = get_detector(cfg["model_key"])
+    osd = get_osd_reader()
+    similarities_dict = st.session_state["similarities"]
+    timestamps_dict = st.session_state["timestamps"]
 
     stop_event = threading.Event()
     st.session_state["analysis_stop"] = stop_event
 
-    # Plain dict — the worker thread writes here; no ScriptRunCtx needed.
+    # Plain dict — рабочий поток пишет сюда; ScriptRunCtx не нужен.
     shared: dict = {
         "running": True,
         "status": f"Запуск анализа ({total} файлов)…",
@@ -176,8 +178,12 @@ def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) ->
             shared["progress"] = i / total
             shared["inner"] = 0.0
             try:
-                run_analysis(v, cfg, refs, stop_event=stop_event,
-                             on_inner_progress=lambda p: shared.__setitem__("inner", p))
+                run_analysis(
+                    v, cfg, refs, det, osd,
+                    similarities_dict, timestamps_dict,
+                    stop_event=stop_event,
+                    on_inner_progress=lambda p: shared.__setitem__("inner", p),
+                )
             except _StopAnalysis:
                 shared["status"] = f"⏹ Остановлено: {v['name']}"
                 break
@@ -197,16 +203,18 @@ def run_analysis(
     video: dict,
     cfg: dict,
     refs: list[RefImage],
+    det,                              # GateDetector — передаётся напрямую
+    osd,                              # OSDReader — передаётся напрямую
+    similarities_dict: dict,          # ссылка на st.session_state["similarities"]
+    timestamps_dict: dict,            # ссылка на st.session_state["timestamps"]
     stop_event: threading.Event | None = None,
-    on_inner_progress=None,          # callable(float 0‥1) | None
+    on_inner_progress=None,           # callable(float 0‥1) | None
 ) -> None:
     """Запускает полный анализ одного видео и сохраняет результат.
 
-    stop_event      — если установлен, прерывает анализ через _StopAnalysis.
-    on_inner_progress — вызывается с долей выполнения (0..1) для каждого кадра.
+    Не обращается к st.session_state — безопасен для вызова из потока.
     """
     video_path = video["path"]
-    det = get_detector(cfg["model_key"])
 
     # Устанавливаем референсы
     det.set_references([r.bgr for r in refs])
@@ -225,9 +233,9 @@ def run_analysis(
         progress_cb=progress_cb,
     )
 
-    # Кешируем для графика
-    st.session_state["similarities"][video_path] = sims
-    st.session_state["timestamps"][video_path] = ts
+    # Кешируем для графика (мутируем dict по ссылке — thread-safe для CPython)
+    similarities_dict[video_path] = sims
+    timestamps_dict[video_path] = ts
 
     # Находим пики
     effective_fps = fps / cfg["sample_every"]
@@ -239,7 +247,6 @@ def run_analysis(
     )
 
     # OCR на кадрах-кандидатах
-    osd = get_osd_reader()
     osd_region = None  # TODO: per-video region
     passes_data = []
 
