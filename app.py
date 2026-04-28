@@ -64,12 +64,10 @@ def _init_state():
         "similarities": {},     # video_path -> np.ndarray
         "timestamps": {},       # video_path -> np.ndarray
         # ── Analysis state ──────────────────────────────────────────────
-        "analysis_running": False,
+        # shared is a plain Python dict written by the worker thread
+        # (thread cannot access st.session_state without ScriptRunCtx).
+        "analysis_shared": None,    # dict | None — set by run_batch
         "analysis_stop": None,      # threading.Event | None
-        "analysis_status": "",      # human-readable status line
-        "analysis_progress": 0.0,   # outer: file N of M  (0..1)
-        "analysis_inner": 0.0,      # inner: frame progress (0..1)
-        "analysis_errors": [],      # list[str]
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -158,35 +156,38 @@ def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) ->
 
     stop_event = threading.Event()
     st.session_state["analysis_stop"] = stop_event
-    st.session_state["analysis_running"] = True
-    st.session_state["analysis_progress"] = 0.0
-    st.session_state["analysis_inner"] = 0.0
-    st.session_state["analysis_status"] = f"Запуск анализа ({total} файлов)…"
-    st.session_state["analysis_errors"] = []
+
+    # Plain dict — the worker thread writes here; no ScriptRunCtx needed.
+    shared: dict = {
+        "running": True,
+        "status": f"Запуск анализа ({total} файлов)…",
+        "progress": 0.0,
+        "inner": 0.0,
+        "errors": [],
+    }
+    st.session_state["analysis_shared"] = shared
 
     def _worker():
         for i, v in enumerate(videos_to_process):
             if stop_event.is_set():
-                st.session_state["analysis_status"] = f"⏹ Остановлено на файле {i + 1} из {total}"
+                shared["status"] = f"⏹ Остановлено на файле {i + 1} из {total}"
                 break
-            st.session_state["analysis_status"] = f"Файл {i + 1} из {total}: {v['name']}"
-            st.session_state["analysis_progress"] = i / total
-            st.session_state["analysis_inner"] = 0.0
+            shared["status"] = f"Файл {i + 1} из {total}: {v['name']}"
+            shared["progress"] = i / total
+            shared["inner"] = 0.0
             try:
                 run_analysis(v, cfg, refs, stop_event=stop_event,
-                             on_inner_progress=lambda p: st.session_state.__setitem__("analysis_inner", p))
+                             on_inner_progress=lambda p: shared.__setitem__("inner", p))
             except _StopAnalysis:
-                st.session_state["analysis_status"] = f"⏹ Остановлено: {v['name']}"
+                shared["status"] = f"⏹ Остановлено: {v['name']}"
                 break
             except Exception as exc:
-                st.session_state["analysis_errors"] = (
-                    st.session_state.get("analysis_errors", []) + [f"{v['name']}: {exc}"]
-                )
+                shared["errors"] = shared["errors"] + [f"{v['name']}: {exc}"]
         else:
-            st.session_state["analysis_progress"] = 1.0
-            st.session_state["analysis_status"] = f"✅ Готово: обработано {total} из {total} файлов"
+            shared["progress"] = 1.0
+            shared["status"] = f"✅ Готово: обработано {total} из {total} файлов"
 
-        st.session_state["analysis_running"] = False
+        shared["running"] = False
 
     t = threading.Thread(target=_worker, daemon=True, name="fpv-analysis")
     t.start()
@@ -343,22 +344,20 @@ if not videos:
 
 # ── Прогресс анализа (polling, пока фоновый поток работает) ──────────────────
 
-if st.session_state.get("analysis_running"):
+_shared: dict | None = st.session_state.get("analysis_shared")
+if _shared and _shared.get("running"):
     with st.container(border=True):
         col_info, col_stop = st.columns([5, 1])
         with col_info:
-            st.markdown(f"**{st.session_state.get('analysis_status', '')}**")
-            st.progress(st.session_state.get("analysis_progress", 0.0),
-                        text="Файлы")
-            inner = st.session_state.get("analysis_inner", 0.0)
-            if inner > 0:
-                st.progress(inner, text="Кадры")
+            st.markdown(f"**{_shared.get('status', '')}**")
+            st.progress(_shared.get("progress", 0.0), text="Файлы")
+            st.progress(_shared.get("inner", 0.0), text="Кадры")
         with col_stop:
             if st.button("🛑 Стоп", key="stop_analysis_btn", width='stretch'):
                 stop_ev = st.session_state.get("analysis_stop")
                 if stop_ev:
                     stop_ev.set()
-        for err in st.session_state.get("analysis_errors", []):
+        for err in _shared.get("errors", []):
             st.error(err)
     time.sleep(0.5)
     st.rerun()
