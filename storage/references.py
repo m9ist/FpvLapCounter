@@ -18,13 +18,28 @@ THUMB_SIZE = (224, 224)  # for display and storage
 REFS_DIR = Path(__file__).resolve().parent.parent / "refs"
 
 
+def _imwrite(path: Path, bgr: np.ndarray) -> None:
+    """cv2.imwrite that works with non-ASCII paths on Windows."""
+    _, buf = cv2.imencode(path.suffix or ".jpg", bgr)
+    path.write_bytes(buf.tobytes())
+
+
+def _imread(path: Path) -> np.ndarray | None:
+    """cv2.imread that works with non-ASCII paths on Windows."""
+    try:
+        arr = np.frombuffer(path.read_bytes(), np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
 def save_ref_to_history(ref: "RefImage") -> Path:
     """Save a reference image as JPEG into REFS_DIR and return the path."""
     REFS_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
     safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in ref.name)[:40]
     fpath = REFS_DIR / f"{ts}_{safe}.jpg"
-    cv2.imwrite(str(fpath), ref.bgr)
+    _imwrite(fpath, ref.bgr)
     return fpath
 
 
@@ -34,7 +49,7 @@ def load_ref_history() -> list["RefImage"]:
         return []
     result = []
     for fpath in sorted(REFS_DIR.glob("*.jpg"), reverse=True):
-        bgr = cv2.imread(str(fpath))
+        bgr = _imread(fpath)
         if bgr is not None:
             # Strip timestamp prefix for display name
             stem = fpath.stem
