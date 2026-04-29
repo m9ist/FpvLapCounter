@@ -152,7 +152,7 @@ def render_verify_tab(
     # st.components.v1.html() renders an iframe where JS *does* run.
     # From the iframe we reach window.parent.document to inject buttons
     # directly into the Streamlit page and scroll section.stMain.
-    st.components.v1.html("""
+    st.iframe("""
 <script>
 (function () {
     var doc = window.parent.document;
