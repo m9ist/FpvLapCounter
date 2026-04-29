@@ -128,7 +128,6 @@ def render_video_list(videos: list[dict], active_idx: int) -> tuple[int, bool]:
         with col_chk:
             checked = st.checkbox(
                 f"Выбрать видео {i}",
-                value=st.session_state[sel_key],
                 key=sel_key,
                 label_visibility="collapsed",
             )
