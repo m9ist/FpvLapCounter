@@ -273,17 +273,21 @@ def _render_plotly_graph(
 
     event = st.plotly_chart(fig, width='stretch', key=f"graph_{sk_frame}", on_select="rerun")
 
-    # Handle click → jump to frame (works for both raw signal and pass-star markers)
+    # Handle click → jump to frame.
+    # Plotly keeps the selection alive across reruns, so we track the last
+    # processed click and ignore repeats — otherwise nav buttons (+1 / -1 …)
+    # get overwritten by the stale selection on the very next render.
+    sk_last_click = f"last_click_{sk_frame}"
     if event and hasattr(event, "selection") and event.selection:
         pts = event.selection.get("points", [])
         if pts:
             clicked_x = pts[0].get("x")
-            if clicked_x is not None:
+            if clicked_x is not None and clicked_x != st.session_state.get(sk_last_click):
                 t = float(clicked_x)
                 frame_idx = int(t * fps)
                 st.session_state[sk_frame] = frame_idx
-                # Also sync the time slider so it jumps to the right position
                 st.session_state[f"time_slider_{sk_frame}"] = t
+                st.session_state[sk_last_click] = clicked_x
 
 
 # ---------------------------------------------------------------------------
