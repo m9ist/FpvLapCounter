@@ -61,3 +61,9 @@ desktop.ini
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Reference images (user-generated, not source)
+refs/
+
+# Model usage stats (generated at runtime)
+storage/model_usage.json
