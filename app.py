@@ -463,14 +463,14 @@ with content_col:
     def on_verified_change(pass_idx: int, value: bool | None):
         if data and 0 <= pass_idx < len(data.passes):
             data.passes[pass_idx].verified = value
-            proj.save(data, video_path)
-            # пересчитываем круги
+            # Пересчитываем круги ДО сохранения, чтобы JSON содержал актуальный lap_count
             passes_for_lap = project_data_to_passes_from_data(data.passes)
             result = analyze(passes_for_lap, best_ns=[1, 3, 5])
             data.laps = [
                 LapData(l.number, l.duration_sec, l.start_pass.time_sec, l.start_pass.osd_time)
                 for l in result.laps
             ]
+            proj.save(data, video_path)
             active_video["lap_count"] = len(data.laps)
             active_video["status"] = "done" if data.laps else "no_laps"
 
