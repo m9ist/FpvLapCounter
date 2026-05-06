@@ -55,13 +55,14 @@ def load_ref_history() -> list["RefImage"]:
             stem = fpath.stem
             parts = stem.split("_", 2)
             display = parts[2] if len(parts) == 3 else stem
-            result.append(RefImage(name=display, bgr=bgr))
+            result.append(RefImage(name=display, bgr=bgr, path=fpath))
     return result
 
 @dataclass(eq=False)
 class RefImage:
     name: str           # display label
     bgr: np.ndarray     # full image for embedding
+    path: Path | None = None  # set for history refs, None for in-session refs
 
     def to_b64(self) -> str:
         """JPEG base64 for JSON storage."""

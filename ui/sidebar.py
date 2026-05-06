@@ -71,7 +71,7 @@ def render_sidebar() -> dict:
     if "_sidebar_folder_input" not in st.session_state:
         st.session_state["_sidebar_folder_input"] = ""
     if "sidebar_model_key" not in st.session_state:
-        st.session_state["sidebar_model_key"] = DEFAULT_MODEL
+        st.session_state["sidebar_model_key"] = model_stats.load_last_model() or DEFAULT_MODEL
     if "sidebar_threshold" not in st.session_state:
         st.session_state["sidebar_threshold"] = 0.60
     if "sidebar_min_lap_sec" not in st.session_state:
@@ -173,8 +173,7 @@ def render_sidebar() -> dict:
         # ── Reference history ──────────────────────────────────────────
         history = load_ref_history()
         if history:
-            with st.expander(f"📂 История ({len(history)} сохр.)"):
-                active_refs = st.session_state["sidebar_refs"]
+            with st.expander(f"📂 История ({len(history)} сохр.)", expanded=True):
                 cols_h = 3
                 for row_start in range(0, len(history), cols_h):
                     row = history[row_start : row_start + cols_h]
@@ -187,10 +186,18 @@ def render_sidebar() -> dict:
                             except Exception:
                                 st.text("—")
                             st.caption(href.name[:12])
-                            if st.button("＋", key=f"hist_add_{hist_idx}",
-                                         width='stretch', help="Добавить в референсы"):
-                                st.session_state["sidebar_refs"].append(href)
-                                st.rerun()
+                            btn_add, btn_del = st.columns(2)
+                            with btn_add:
+                                if st.button("＋", key=f"hist_add_{hist_idx}",
+                                             width='stretch', help="Добавить в референсы"):
+                                    st.session_state["sidebar_refs"].append(href)
+                                    st.rerun()
+                            with btn_del:
+                                if st.button("🗑", key=f"hist_del_{hist_idx}",
+                                             width='stretch', help="Удалить из истории"):
+                                    if href.path and href.path.exists():
+                                        href.path.unlink()
+                                    st.rerun()
 
         st.markdown("---")
 
@@ -220,6 +227,7 @@ def render_sidebar() -> dict:
             label_visibility="collapsed",
         )
         st.session_state["sidebar_model_key"] = selected_key
+        model_stats.save_last_model(selected_key)
 
         info = MODELS[selected_key]
         st.caption(f"{info.speed_note} · {info.size_mb} МБ · {info.backend}")

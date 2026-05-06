@@ -65,5 +65,6 @@ desktop.ini
 # Reference images (user-generated, not source)
 refs/
 
-# Model usage stats (generated at runtime)
+# Model usage stats and preferences (generated at runtime)
 storage/model_usage.json
+storage/last_model.json

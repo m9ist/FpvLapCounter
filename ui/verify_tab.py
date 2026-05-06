@@ -204,9 +204,10 @@ def render_verify_tab(
                 on_verified_change(i, True)
             st.rerun()
     with col_fake:
-        if st.button("❌ Все — фейк", key="verify_all_fake_btn", width='stretch'):
-            for i in range(len(passes)):
-                on_verified_change(i, False)
+        if st.button("❌ Непроверенные — фейк", key="verify_all_fake_btn", width='stretch'):
+            for i, p in enumerate(passes):
+                if p.verified is None:
+                    on_verified_change(i, False)
             st.rerun()
     with col_reset:
         if st.button("🔄 Сбросить верификацию", key="verify_reset_btn", width='stretch'):
