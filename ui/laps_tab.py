@@ -199,12 +199,15 @@ def render_compare_tab(
 
         avg_str = _fmt_sec(_avg_sec(laps)) if laps else "—"
 
+        first_pass_str = _fmt_sec(laps[0].start_pass.time_sec) if laps else "—"
+
         rows.append({
             "Видео": name,
             "Кругов": len(laps),
             "Лучший круг": best_lap_str,
             f"Лучшие {best_n}": best_n_str,
             f"Avg {best_n}": best_n_avg_str,
+            "1й пролёт": first_pass_str,
             "Средний": avg_str,
             "_path": video_path,
             "_best_lap_sec": best_lap_sec,
