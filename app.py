@@ -7,6 +7,8 @@ FPV Lap Counter
 from utils.logger import setup as _setup_logging
 _setup_logging()
 
+import ctypes
+import shutil
 import threading
 import time
 
@@ -24,7 +26,7 @@ from storage import project as proj
 from storage.project import ProjectData, PassData, LapData
 from storage.references import RefImage, from_frame, save_ref_to_history
 from storage import model_stats
-from ui.sidebar import render_sidebar
+from ui.sidebar import render_sidebar, pick_folder_dialog
 from ui.video_list import render_video_list
 from ui.graph_tab import render_graph_tab
 from ui.verify_tab import render_verify_tab
@@ -53,6 +55,28 @@ class _StopAnalysis(Exception):
     """Raised inside run_analysis when stop_event is set."""
 
 
+# ── Windows sleep prevention ──────────────────────────────────────────────────
+
+_ES_CONTINUOUS      = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+def _prevent_sleep() -> None:
+    """Запретить Windows засыпать (удерживает таймер системного бодрствования)."""
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED
+        )
+    except Exception:
+        pass
+
+def _restore_sleep() -> None:
+    """Вернуть нормальный режим сна после завершения работы."""
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(_ES_CONTINUOUS)
+    except Exception:
+        pass
+
+
 def _init_state():
     defaults = {
         "videos": [],           # list of video dicts
@@ -68,6 +92,9 @@ def _init_state():
         # (thread cannot access st.session_state without ScriptRunCtx).
         "analysis_shared": None,    # dict | None — set by run_batch
         "analysis_stop": None,      # threading.Event | None
+        # ── Club post-session workflow ───────────────────────────────────
+        "club_step": None,          # None | "preview"
+        "club_source": None,        # source folder path (str)
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -139,7 +166,57 @@ def project_data_to_passes(data: ProjectData) -> list[Pass]:
     ]
 
 
-def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) -> None:
+def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage]) -> None:
+    """Переносит .ts из source в dest, удаляет картинки, запускает анализ.
+
+    Вызывается из основного потока после подтверждения пользователем.
+    Блокировка сна снимается автоматически по завершении фонового потока.
+    """
+    _prevent_sleep()
+
+    src_path = Path(source)
+    dst_path = Path(dest)
+    dst_path.mkdir(parents=True, exist_ok=True)
+
+    img_exts = {".jpg", ".jpeg", ".png"}
+    ts_exts  = {".ts", ".mp4", ".avi", ".mov", ".mkv"}
+
+    for f in src_path.rglob("*"):
+        if not f.is_file():
+            continue
+        ext = f.suffix.lower()
+        if ext in ts_exts:
+            target = dst_path / f.name
+            # Не перезаписывать если уже есть
+            if not target.exists():
+                shutil.move(str(f), str(target))
+        elif ext in img_exts:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+    # Обновляем список видео
+    st.session_state["videos"] = scan_folder(dest)
+    st.session_state["active_idx"] = 0
+    st.session_state["_last_folder"] = dest
+    st.session_state["club_step"] = None
+    st.session_state["club_source"] = None
+
+    # Запускаем анализ (sleep вернётся когда поток закончит)
+    unprocessed = [v for v in st.session_state["videos"] if v["status"] == "new"]
+    if unprocessed and refs:
+        run_batch(unprocessed, cfg, refs, restore_sleep=True)
+    else:
+        _restore_sleep()
+
+
+def run_batch(
+    videos_to_process: list[dict],
+    cfg: dict,
+    refs: list[RefImage],
+    restore_sleep: bool = False,
+) -> None:
     """Запускает анализ списка видео в фоновом потоке.
 
     Все обращения к session_state делаются в основном потоке до старта потока.
@@ -194,6 +271,8 @@ def run_batch(videos_to_process: list[dict], cfg: dict, refs: list[RefImage]) ->
             shared["status"] = f"✅ Готово: обработано {total} из {total} файлов"
 
         shared["running"] = False
+        if restore_sleep:
+            _restore_sleep()
 
     t = threading.Thread(target=_worker, daemon=True, name="fpv-analysis")
     t.start()
@@ -370,19 +449,73 @@ if _shared and _shared.get("running"):
     st.rerun()
 
 
-# ── Кнопка "Обработать выбранные" ────────────────────────────────────────────
+# ── Кнопки управления ────────────────────────────────────────────────────────
 
 selected = [v for v in videos if v["selected"]]
 unprocessed = [v for v in selected if v["status"] == "new"]
 
-top_cols = st.columns([3, 1])
+top_cols = st.columns([2, 1, 1])
 with top_cols[1]:
+    if st.button("📦 После клуба", width='stretch',
+                 help="Перенести файлы с флешки и запустить анализ"):
+        chosen = pick_folder_dialog()
+        if chosen:
+            st.session_state["club_source"] = chosen
+            st.session_state["club_step"] = "preview"
+            st.rerun()
+with top_cols[2]:
     if unprocessed:
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот")
         elif st.button(f"🚀 Обработать ({len(unprocessed)})", type="primary", width='stretch'):
             run_batch(unprocessed, cfg, refs)
             st.rerun()  # войти в polling loop
+
+# ── Подтверждение переноса после клуба ───────────────────────────────────────
+
+if st.session_state.get("club_step") == "preview":
+    source = st.session_state.get("club_source", "")
+    dest   = cfg["folder"] or ""
+    src_path = Path(source) if source else None
+
+    ts_files  = sorted(src_path.rglob("*.ts"),  key=lambda f: f.name) if src_path else []
+    img_files = (
+        sorted(src_path.rglob("*.jpg"), key=lambda f: f.name) +
+        sorted(src_path.rglob("*.jpeg"), key=lambda f: f.name) +
+        sorted(src_path.rglob("*.png"),  key=lambda f: f.name)
+    ) if src_path else []
+
+    with st.container(border=True):
+        st.markdown("### 📦 Перенос файлов после клуба")
+
+        info_cols = st.columns(2)
+        with info_cols[0]:
+            st.markdown(f"**Откуда:** `{source or '—'}`")
+            st.markdown(f"**Куда:** `{dest or '—'}`")
+        with info_cols[1]:
+            st.metric("Видео (.ts и др.)", len(ts_files))
+            st.metric("Удалить картинок", len(img_files))
+
+        if ts_files:
+            with st.expander(f"Список видеофайлов ({len(ts_files)})"):
+                for f in ts_files:
+                    st.text(f.name)
+
+        if not dest:
+            st.warning("⚠️ Сначала укажи папку назначения в боковой панели")
+
+        btn_cols = st.columns(2)
+        with btn_cols[0]:
+            if st.button("❌ Отмена", key="club_cancel", width='stretch'):
+                st.session_state["club_step"] = None
+                st.session_state["club_source"] = None
+                st.rerun()
+        with btn_cols[1]:
+            ok = bool(dest and ts_files and refs)
+            if st.button("✅ Подтвердить", key="club_confirm",
+                         type="primary", width='stretch', disabled=not ok):
+                run_club_transfer(source, dest, cfg, refs)
+                st.rerun()
 
 
 # ── Основной layout: список видео + контент ───────────────────────────────────

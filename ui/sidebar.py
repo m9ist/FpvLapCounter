@@ -15,7 +15,7 @@ from storage.references import (
 )
 
 
-def _pick_folder_dialog() -> str | None:
+def pick_folder_dialog() -> str | None:
     """Open a folder picker by spawning a child Python process with tkinter.
 
     Running in a subprocess avoids COM/STA threading issues inside Streamlit.
@@ -96,7 +96,7 @@ def render_sidebar() -> dict:
         col_btn, col_clear = st.columns([3, 1])
         with col_btn:
             if st.button("Выбрать папку…", width='stretch'):
-                chosen = _pick_folder_dialog()
+                chosen = pick_folder_dialog()
                 if chosen:
                     st.session_state["_sidebar_folder_input"] = chosen
         with col_clear:
