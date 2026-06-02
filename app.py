@@ -420,11 +420,76 @@ videos = st.session_state["videos"]
 refs: list[RefImage] = cfg["refs"]
 
 
-# ── Нет папки ─────────────────────────────────────────────────────────────────
+# ── Кнопка «После клуба» (видна всегда, даже в пустой папке) ─────────────────
+
+_club_cols = st.columns([4, 1])
+with _club_cols[1]:
+    if st.button("📦 После клуба", width='stretch',
+                 help="Перенести файлы с флешки и запустить анализ"):
+        chosen = pick_folder_dialog()
+        if chosen:
+            st.session_state["club_source"] = chosen
+            st.session_state["club_step"] = "preview"
+            st.rerun()
+
+if st.session_state.get("club_step") == "preview":
+    source   = st.session_state.get("club_source", "")
+    dest     = cfg["folder"] or ""
+    src_path = Path(source) if source else None
+
+    video_exts = {".ts", ".mp4", ".avi", ".mov", ".mkv"}
+    ts_files = sorted(
+        (f for f in src_path.rglob("*") if f.is_file() and f.suffix.lower() in video_exts),
+        key=lambda f: f.name,
+    ) if src_path else []
+    img_files = sorted(
+        (f for f in src_path.rglob("*")
+         if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png"}),
+        key=lambda f: f.name,
+    ) if src_path else []
+
+    with st.container(border=True):
+        st.markdown("### 📦 Перенос файлов после клуба")
+
+        info_cols = st.columns(2)
+        with info_cols[0]:
+            st.markdown(f"**Откуда:** `{source or '—'}`")
+            st.markdown(f"**Куда:** `{dest or '—'}`")
+        with info_cols[1]:
+            st.metric("Видеофайлов", len(ts_files))
+            st.metric("Удалить картинок", len(img_files))
+
+        if ts_files:
+            with st.expander(f"Список файлов ({len(ts_files)})"):
+                for f in ts_files:
+                    st.text(f.name)
+
+        if not dest:
+            st.warning("⚠️ Укажи папку назначения в боковой панели")
+        if not refs:
+            st.warning("⚠️ Добавь референсные кадры ворот в боковой панели")
+
+        btn_cols = st.columns(2)
+        with btn_cols[0]:
+            if st.button("❌ Отмена", key="club_cancel", width='stretch'):
+                st.session_state["club_step"] = None
+                st.session_state["club_source"] = None
+                st.rerun()
+        with btn_cols[1]:
+            ok = bool(dest and ts_files and refs)
+            if st.button("✅ Подтвердить", key="club_confirm",
+                         type="primary", width='stretch', disabled=not ok):
+                run_club_transfer(source, dest, cfg, refs)
+                st.rerun()
+
+# ── Нет видео в папке ─────────────────────────────────────────────────────────
 
 if not videos:
     st.markdown("## 🏁 FPV Lap Counter")
-    st.info("👈 Выбери папку с видео в боковой панели и добавь референсные кадры ворот.")
+    if not cfg["folder"]:
+        st.info("👈 Выбери папку с видео в боковой панели и добавь референсные кадры ворот.")
+    else:
+        st.info("Папка пуста. Добавь видеофайлы или воспользуйся кнопкой «📦 После клуба».")
     st.stop()
 
 
@@ -449,73 +514,19 @@ if _shared and _shared.get("running"):
     st.rerun()
 
 
-# ── Кнопки управления ────────────────────────────────────────────────────────
+# ── Кнопка "Обработать выбранные" ────────────────────────────────────────────
 
 selected = [v for v in videos if v["selected"]]
 unprocessed = [v for v in selected if v["status"] == "new"]
 
-top_cols = st.columns([2, 1, 1])
+top_cols = st.columns([3, 1])
 with top_cols[1]:
-    if st.button("📦 После клуба", width='stretch',
-                 help="Перенести файлы с флешки и запустить анализ"):
-        chosen = pick_folder_dialog()
-        if chosen:
-            st.session_state["club_source"] = chosen
-            st.session_state["club_step"] = "preview"
-            st.rerun()
-with top_cols[2]:
     if unprocessed:
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот")
         elif st.button(f"🚀 Обработать ({len(unprocessed)})", type="primary", width='stretch'):
             run_batch(unprocessed, cfg, refs)
-            st.rerun()  # войти в polling loop
-
-# ── Подтверждение переноса после клуба ───────────────────────────────────────
-
-if st.session_state.get("club_step") == "preview":
-    source = st.session_state.get("club_source", "")
-    dest   = cfg["folder"] or ""
-    src_path = Path(source) if source else None
-
-    ts_files  = sorted(src_path.rglob("*.ts"),  key=lambda f: f.name) if src_path else []
-    img_files = (
-        sorted(src_path.rglob("*.jpg"), key=lambda f: f.name) +
-        sorted(src_path.rglob("*.jpeg"), key=lambda f: f.name) +
-        sorted(src_path.rglob("*.png"),  key=lambda f: f.name)
-    ) if src_path else []
-
-    with st.container(border=True):
-        st.markdown("### 📦 Перенос файлов после клуба")
-
-        info_cols = st.columns(2)
-        with info_cols[0]:
-            st.markdown(f"**Откуда:** `{source or '—'}`")
-            st.markdown(f"**Куда:** `{dest or '—'}`")
-        with info_cols[1]:
-            st.metric("Видео (.ts и др.)", len(ts_files))
-            st.metric("Удалить картинок", len(img_files))
-
-        if ts_files:
-            with st.expander(f"Список видеофайлов ({len(ts_files)})"):
-                for f in ts_files:
-                    st.text(f.name)
-
-        if not dest:
-            st.warning("⚠️ Сначала укажи папку назначения в боковой панели")
-
-        btn_cols = st.columns(2)
-        with btn_cols[0]:
-            if st.button("❌ Отмена", key="club_cancel", width='stretch'):
-                st.session_state["club_step"] = None
-                st.session_state["club_source"] = None
-                st.rerun()
-        with btn_cols[1]:
-            ok = bool(dest and ts_files and refs)
-            if st.button("✅ Подтвердить", key="club_confirm",
-                         type="primary", width='stretch', disabled=not ok):
-                run_club_transfer(source, dest, cfg, refs)
-                st.rerun()
+            st.rerun()
 
 
 # ── Основной layout: список видео + контент ───────────────────────────────────
