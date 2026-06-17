@@ -33,6 +33,7 @@ class ProjectData:
     best_lap_idx: int | None = None
     best_3_indices: list[int] | None = None
     references_b64: list[str] = field(default_factory=list)  # base64 JPEG thumbnails stored here
+    keep: bool | None = None          # user marked this file to keep in compare tab
 
 def json_path(video_path: str | Path) -> Path:
     p = Path(video_path)

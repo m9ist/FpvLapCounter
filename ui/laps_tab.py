@@ -167,15 +167,19 @@ def render_compare_tab(
     best_n: int,
     on_delete_videos: Callable[[list[str]], None] | None = None,
     no_lap_paths: list[str] | None = None,
+    keep_map: dict[str, bool | None] | None = None,
+    on_keep_change: Callable[[str, bool], None] | None = None,
 ) -> None:
     """
     Render a comparison table across multiple analyzed videos.
 
     Parameters
     ----------
-    all_results   : Mapping video_path -> LapResult (videos with laps).
-    best_n        : Window size for best-consecutive-n query.
-    no_lap_paths  : Paths of analyzed videos that have zero laps.
+    all_results    : Mapping video_path -> LapResult (videos with laps).
+    best_n         : Window size for best-consecutive-n query.
+    no_lap_paths   : Paths of analyzed videos that have zero laps.
+    keep_map       : Mapping video_path -> keep flag (from saved JSON).
+    on_keep_change : Called when user toggles 'Оставить' for a video.
     """
     st.subheader("Сравнение видео")
 
@@ -217,6 +221,7 @@ def render_compare_tab(
             "_path": video_path,
             "_best_lap_sec": best_lap_sec,
             "_best_n_total": best_n_total,
+            "_keep": bool((keep_map or {}).get(video_path)),
         })
 
     # Sort by best_n_total ascending (best = smallest)
@@ -236,6 +241,7 @@ def render_compare_tab(
             "_path": path,
             "_best_lap_sec": float("inf"),
             "_best_n_total": float("inf"),
+            "_keep": bool((keep_map or {}).get(path)),
         })
 
     df_display = pd.DataFrame([
@@ -285,7 +291,8 @@ def render_compare_tab(
 
     # ── Editable table with "Оставить" checkbox ────────────────────────
     df_edit = df_display.copy()
-    df_edit.insert(0, "Оставить", False)
+    # Initialise from saved keep flags (restored from JSON)
+    df_edit.insert(0, "Оставить", [bool(r["_keep"]) for r in rows])
 
     edited_df = st.data_editor(
         df_edit,
@@ -298,6 +305,16 @@ def render_compare_tab(
         },
         disabled=[c for c in df_edit.columns if c != "Оставить"],
     )
+
+    # Persist any checkbox changes to JSON
+    if on_keep_change:
+        for i, row in enumerate(rows):
+            if i >= len(edited_df):
+                break
+            new_val = bool(edited_df.iloc[i]["Оставить"])
+            if new_val != row["_keep"]:
+                on_keep_change(row["_path"], new_val)
+                row["_keep"] = new_val  # update in-memory to avoid repeat saves
 
     # Paths whose "Оставить" is unchecked
     paths_to_delete = [
