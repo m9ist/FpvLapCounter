@@ -166,18 +166,20 @@ def render_compare_tab(
     all_results: dict[str, LapResult],
     best_n: int,
     on_delete_videos: Callable[[list[str]], None] | None = None,
+    no_lap_paths: list[str] | None = None,
 ) -> None:
     """
     Render a comparison table across multiple analyzed videos.
 
     Parameters
     ----------
-    all_results : Mapping video_path -> LapResult.
-    best_n      : Window size for best-consecutive-n query.
+    all_results   : Mapping video_path -> LapResult (videos with laps).
+    best_n        : Window size for best-consecutive-n query.
+    no_lap_paths  : Paths of analyzed videos that have zero laps.
     """
     st.subheader("Сравнение видео")
 
-    if not all_results:
+    if not all_results and not no_lap_paths:
         st.info("Нет проанализированных видео для сравнения.")
         return
 
@@ -220,6 +222,22 @@ def render_compare_tab(
     # Sort by best_n_total ascending (best = smallest)
     rows.sort(key=lambda r: (r["_best_n_total"], r["_best_lap_sec"]))
 
+    # Append no-laps videos at the bottom (not sorted, just listed)
+    for path in (no_lap_paths or []):
+        name = path.replace("\\", "/").split("/")[-1]
+        rows.append({
+            "Видео": f"⚠️ {name}",
+            "Кругов": 0,
+            "Лучший круг": "—",
+            f"Лучшие {best_n}": "—",
+            f"Avg {best_n}": "—",
+            "1й пролёт": "—",
+            "Средний": "—",
+            "_path": path,
+            "_best_lap_sec": float("inf"),
+            "_best_n_total": float("inf"),
+        })
+
     df_display = pd.DataFrame([
         {k: v for k, v in row.items() if not k.startswith("_")}
         for row in rows
@@ -258,10 +276,11 @@ def render_compare_tab(
             return ["background-color: #fde8d8; color: #7a3500; font-weight: bold"] * len(row)  # bronze
         return [""] * len(row)
 
-    # Add medal prefix to top-3 video names
+    # Add medal prefix to top-3 rows that actually have laps
+    n_with_laps = len(all_results)
     df_display = df_display.copy()
     for i, medal in enumerate(_MEDALS):
-        if i < len(df_display):
+        if i < n_with_laps:
             df_display.at[i, "Видео"] = f"{medal} {df_display.at[i, 'Видео']}"
 
     # ── Editable table with "Оставить" checkbox ────────────────────────

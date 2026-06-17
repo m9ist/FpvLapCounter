@@ -651,10 +651,13 @@ with content_col:
 
     with tab_compare:
         all_results = {}
+        no_lap_paths = []
         for v in videos:
             if v["data"] and v["data"].laps:
                 passes = project_data_to_passes_from_data(v["data"].passes)
                 all_results[v["path"]] = analyze(passes, best_ns=[1, cfg["best_n"], 5])
+            elif v["status"] == "no_laps":
+                no_lap_paths.append(v["path"])
 
         def on_delete_videos(paths: list[str]) -> None:
             for path in paths:
@@ -673,4 +676,5 @@ with content_col:
                 st.session_state["active_idx"] = 0
 
         render_compare_tab(all_results, cfg["best_n"],
-                           on_delete_videos=on_delete_videos)
+                           on_delete_videos=on_delete_videos,
+                           no_lap_paths=no_lap_paths)
