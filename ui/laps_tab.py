@@ -266,7 +266,7 @@ def render_compare_tab(
 
     # ── Editable table with "Оставить" checkbox ────────────────────────
     df_edit = df_display.copy()
-    df_edit.insert(0, "Оставить", True)
+    df_edit.insert(0, "Оставить", False)
 
     edited_df = st.data_editor(
         df_edit,
