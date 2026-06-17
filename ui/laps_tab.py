@@ -7,6 +7,8 @@ from __future__ import annotations
 import io
 import math
 import os
+from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import streamlit as st
@@ -163,6 +165,7 @@ def render_laps_tab(
 def render_compare_tab(
     all_results: dict[str, LapResult],
     best_n: int,
+    on_delete_videos: Callable[[list[str]], None] | None = None,
 ) -> None:
     """
     Render a comparison table across multiple analyzed videos.
@@ -261,24 +264,33 @@ def render_compare_tab(
         if i < len(df_display):
             df_display.at[i, "Видео"] = f"{medal} {df_display.at[i, 'Видео']}"
 
-    styled = df_display.style.apply(_highlight_compare, axis=1)
+    # ── Editable table with "Оставить" checkbox ────────────────────────
+    df_edit = df_display.copy()
+    df_edit.insert(0, "Оставить", True)
 
-    st.dataframe(
-        styled,
+    edited_df = st.data_editor(
+        df_edit,
+        key="compare_table",
         width='stretch',
         hide_index=True,
         column_config={
-            "Кругов": st.column_config.NumberColumn(width="small"),
+            "Оставить": st.column_config.CheckboxColumn("Оставить", width="small"),
+            "Кругов":   st.column_config.NumberColumn(width="small"),
         },
+        disabled=[c for c in df_edit.columns if c != "Оставить"],
     )
 
+    # Paths whose "Оставить" is unchecked
+    paths_to_delete = [
+        rows[i]["_path"]
+        for i in range(min(len(rows), len(edited_df)))
+        if not edited_df.iloc[i]["Оставить"]
+    ]
+
     # ── Open in player buttons ─────────────────────────────────────────
-    # st.dataframe cells don't support buttons; render them below the
-    # table in the same sorted order so rank is visually preserved.
     st.markdown("**▶ Открыть в плеере:**")
     btn_cols = st.columns(max(len(rows), 1))
     for i, (row, col) in enumerate(zip(rows, btn_cols)):
-        # Strip medal prefix that was added to df_display copy
         short = row["Видео"][:25]
         with col:
             if st.button(short, key=f"open_video_{i}", width='stretch',
@@ -287,3 +299,38 @@ def render_compare_tab(
                     os.startfile(row["_path"])
                 except Exception as exc:
                     st.error(f"Не удалось открыть файл: {exc}")
+
+    # ── Delete unchecked videos ────────────────────────────────────────
+    _SK_DEL = "compare_delete_paths"
+
+    if paths_to_delete and on_delete_videos:
+        if not st.session_state.get(_SK_DEL):
+            st.markdown("---")
+            if st.button(
+                f"🗑 Удалить не отмеченные ({len(paths_to_delete)})",
+                key="compare_delete_btn",
+                type="primary",
+                width="content",
+            ):
+                st.session_state[_SK_DEL] = paths_to_delete
+                st.rerun()
+
+    if st.session_state.get(_SK_DEL):
+        confirmed = st.session_state[_SK_DEL]
+        with st.container(border=True):
+            st.error(
+                f"⚠️ Будет **безвозвратно удалено** {len(confirmed)} файлов:"
+            )
+            for p in confirmed:
+                st.text(Path(p).name)
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("❌ Отмена", key="compare_del_cancel", width='stretch'):
+                    del st.session_state[_SK_DEL]
+                    st.rerun()
+            with c2:
+                if st.button("🗑 Удалить", key="compare_del_confirm",
+                             type="primary", width='stretch'):
+                    on_delete_videos(confirmed)
+                    del st.session_state[_SK_DEL]
+                    st.rerun()

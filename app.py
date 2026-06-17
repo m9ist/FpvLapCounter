@@ -655,4 +655,22 @@ with content_col:
             if v["data"] and v["data"].laps:
                 passes = project_data_to_passes_from_data(v["data"].passes)
                 all_results[v["path"]] = analyze(passes, best_ns=[1, cfg["best_n"], 5])
-        render_compare_tab(all_results, cfg["best_n"])
+
+        def on_delete_videos(paths: list[str]) -> None:
+            for path in paths:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                json_f = proj.json_path(path)
+                if json_f.exists():
+                    json_f.unlink()
+                st.session_state["similarities"].pop(path, None)
+                st.session_state["timestamps"].pop(path, None)
+                st.session_state["frames_cache"].pop(path, None)
+            if cfg["folder"]:
+                st.session_state["videos"] = scan_folder(cfg["folder"])
+                st.session_state["active_idx"] = 0
+
+        render_compare_tab(all_results, cfg["best_n"],
+                           on_delete_videos=on_delete_videos)
