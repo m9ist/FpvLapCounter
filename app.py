@@ -10,7 +10,6 @@ _setup_logging()
 import ctypes
 import shutil
 import threading
-import time
 
 import streamlit as st
 import numpy as np
@@ -77,12 +76,30 @@ def _restore_sleep() -> None:
         pass
 
 
+_THREAD_PRIORITY_BELOW_NORMAL = -1
+
+def _lower_current_thread_priority() -> None:
+    """Понизить приоритет текущего потока (для фонового анализа).
+
+    GetCurrentThread() возвращает псевдо-хэндл вызывающего потока, поэтому
+    приоритет понижается только у рабочего потока, а UI остаётся отзывчивым.
+    """
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentThread.restype = ctypes.c_void_p
+        k32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        k32.SetThreadPriority(k32.GetCurrentThread(), _THREAD_PRIORITY_BELOW_NORMAL)
+    except Exception:
+        pass
+
+
 def _init_state():
     defaults = {
         "videos": [],           # list of video dicts
         "active_idx": 0,
         "detector": None,       # loaded GateDetector
         "detector_model": None, # which model is loaded
+        "detector_device": None, # on which device it is loaded
         "osd_reader": None,
         "frames_cache": {},     # video_path -> {frame_idx: bgr}
         "similarities": {},     # video_path -> np.ndarray
@@ -128,15 +145,17 @@ def scan_folder(folder: str) -> list[dict]:
     return videos
 
 
-def get_detector(model_key: str) -> GateDetector:
-    """Возвращает загруженный детектор, перегружает если модель изменилась."""
+def get_detector(model_key: str, device: str | None = None) -> GateDetector:
+    """Возвращает загруженный детектор, перегружает если модель или устройство изменились."""
     if (st.session_state["detector"] is None
-            or st.session_state["detector_model"] != model_key):
+            or st.session_state["detector_model"] != model_key
+            or st.session_state["detector_device"] != device):
         det = GateDetector(model_key)
-        with st.spinner(f"Загрузка модели {MODELS[model_key].name}..."):
-            det.load()
+        with st.spinner(f"Загрузка модели {MODELS[model_key].name} на {device}..."):
+            det.load(device)
         st.session_state["detector"] = det
         st.session_state["detector_model"] = model_key
+        st.session_state["detector_device"] = device
     return st.session_state["detector"]
 
 
@@ -166,9 +185,30 @@ def project_data_to_passes(data: ProjectData) -> list[Pass]:
     ]
 
 
-def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage]) -> None:
-    """Переносит .ts из source в dest, удаляет картинки, запускает анализ.
+def _video_duration_sec(path: Path) -> float:
+    """Длительность видео в секундах. -1.0 если не удалось определить."""
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return -1.0
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+        if fps <= 0 or frames <= 0:
+            return -1.0
+        return frames / fps
+    finally:
+        cap.release()
 
+
+_MIN_CLUB_VIDEO_SEC = 30.0  # видео короче — мусор, удаляем при переносе из клуба
+
+
+def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage],
+                      progress=None) -> None:
+    """Переносит видео из source в dest, удаляет картинки, запускает анализ.
+
+    Видео короче _MIN_CLUB_VIDEO_SEC секунд удаляются, а не переносятся.
+    progress : callable(done:int, total:int, label:str) | None — отчёт о прогрессе.
     Вызывается из основного потока после подтверждения пользователем.
     Блокировка сна снимается автоматически по завершении фонового потока.
     """
@@ -181,20 +221,40 @@ def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage]) -
     img_exts = {".jpg", ".jpeg", ".png"}
     ts_exts  = {".ts", ".mp4", ".avi", ".mov", ".mkv"}
 
-    for f in src_path.rglob("*"):
-        if not f.is_file():
-            continue
-        ext = f.suffix.lower()
-        if ext in ts_exts:
-            target = dst_path / f.name
-            # Не перезаписывать если уже есть
-            if not target.exists():
-                shutil.move(str(f), str(target))
-        elif ext in img_exts:
+    all_files = [f for f in src_path.rglob("*") if f.is_file()]
+    video_files = [f for f in all_files if f.suffix.lower() in ts_exts]
+    image_files = [f for f in all_files if f.suffix.lower() in img_exts]
+    total = len(video_files) + len(image_files)
+    done = 0
+
+    for f in video_files:
+        if progress:
+            progress(done, total, f"Видео: {f.name}")
+        # Короткие ролики (< 30 с) — мусор, удаляем не перенося.
+        dur = _video_duration_sec(f)
+        if 0 <= dur < _MIN_CLUB_VIDEO_SEC:
             try:
                 f.unlink()
             except Exception:
                 pass
+        else:
+            target = dst_path / f.name
+            # Не перезаписывать если уже есть
+            if not target.exists():
+                shutil.move(str(f), str(target))
+        done += 1
+
+    for f in image_files:
+        if progress:
+            progress(done, total, f"Удаляю картинку: {f.name}")
+        try:
+            f.unlink()
+        except Exception:
+            pass
+        done += 1
+
+    if progress:
+        progress(total, total, "Готово")
 
     # Обновляем список видео
     st.session_state["videos"] = scan_folder(dest)
@@ -228,7 +288,7 @@ def run_batch(
 
     # Прогрев тяжёлых объектов в основном потоке (со спиннерами),
     # захватываем прямые ссылки — поток не должен трогать session_state.
-    det = get_detector(cfg["model_key"])
+    det = get_detector(cfg["model_key"], cfg.get("device"))
     osd = get_osd_reader()
     similarities_dict = st.session_state["similarities"]
     timestamps_dict = st.session_state["timestamps"]
@@ -247,6 +307,7 @@ def run_batch(
     st.session_state["analysis_shared"] = shared
 
     def _worker():
+        _lower_current_thread_priority()
         for i, v in enumerate(videos_to_process):
             if stop_event.is_set():
                 shared["status"] = f"⏹ Остановлено на файле {i + 1} из {total}"
@@ -419,6 +480,10 @@ if cfg["folder"] and cfg["folder"] != st.session_state.get("_last_folder"):
 videos = st.session_state["videos"]
 refs: list[RefImage] = cfg["refs"]
 
+# Идёт ли сейчас фоновый анализ (блокирует запуск новых батчей)
+_shared: dict | None = st.session_state.get("analysis_shared")
+_analysis_running = bool(_shared and _shared.get("running"))
+
 
 # ── Кнопка «После клуба» (видна всегда, даже в пустой папке) ─────────────────
 
@@ -468,6 +533,8 @@ if st.session_state.get("club_step") == "preview":
             st.warning("⚠️ Укажи папку назначения в боковой панели")
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот в боковой панели")
+        if _analysis_running:
+            st.warning("⏳ Идёт обработка — дождись её окончания")
 
         btn_cols = st.columns(2)
         with btn_cols[0]:
@@ -476,11 +543,28 @@ if st.session_state.get("club_step") == "preview":
                 st.session_state["club_source"] = None
                 st.rerun()
         with btn_cols[1]:
-            ok = bool(dest and ts_files and refs)
+            ok = bool(dest and ts_files and refs) and not _analysis_running
             if st.button("✅ Подтвердить", key="club_confirm",
                          type="primary", width='stretch', disabled=not ok):
-                run_club_transfer(source, dest, cfg, refs)
+                st.session_state["club_step"] = "transfer"
                 st.rerun()
+
+# ── Перенос файлов после клуба (с прогрессом, затем запуск анализа) ──────────
+
+if st.session_state.get("club_step") == "transfer":
+    source = st.session_state.get("club_source", "")
+    dest   = cfg["folder"] or ""
+    with st.container(border=True):
+        st.markdown("### 📦 Перенос файлов после клуба")
+        bar = st.progress(0.0, text="Подготовка…")
+
+        def _club_progress(done: int, total: int, label: str) -> None:
+            frac = done / total if total else 1.0
+            bar.progress(frac, text=f"{done}/{total} · {label}")
+
+        run_club_transfer(source, dest, cfg, refs, progress=_club_progress)
+    # Перенос завершён, анализ запущен в фоне — обновляем интерфейс
+    st.rerun()
 
 # ── Нет видео в папке ─────────────────────────────────────────────────────────
 
@@ -493,25 +577,42 @@ if not videos:
     st.stop()
 
 
-# ── Прогресс анализа (polling, пока фоновый поток работает) ──────────────────
+# ── Прогресс анализа (фоновый поток + авто-обновление через фрагмент) ────────
+# Фрагмент сам перерисовывается каждые 0.5 с, не блокируя остальной интерфейс,
+# поэтому можно валидировать кадры готовых видео пока идёт обработка.
 
-_shared: dict | None = st.session_state.get("analysis_shared")
-if _shared and _shared.get("running"):
+@st.fragment(run_every=0.5)
+def _analysis_progress_fragment():
+    shared = st.session_state.get("analysis_shared")
+    if not shared:
+        return
+    if not shared.get("running"):
+        # Анализ завершился — сохраняем ошибки, обновляем весь интерфейс
+        # (статусы видео) и прекращаем авто-обновление фрагмента.
+        st.session_state["_analysis_errors"] = shared.get("errors", [])
+        st.session_state["analysis_shared"] = None
+        st.rerun(scope="app")
+        return
     with st.container(border=True):
         col_info, col_stop = st.columns([5, 1])
         with col_info:
-            st.markdown(f"**{_shared.get('status', '')}**")
-            st.progress(_shared.get("progress", 0.0), text="Файлы")
-            st.progress(_shared.get("inner", 0.0), text="Кадры")
+            st.markdown(f"**{shared.get('status', '')}**")
+            st.progress(shared.get("progress", 0.0), text="Файлы")
+            st.progress(shared.get("inner", 0.0), text="Кадры")
         with col_stop:
             if st.button("🛑 Стоп", key="stop_analysis_btn", width='stretch'):
                 stop_ev = st.session_state.get("analysis_stop")
                 if stop_ev:
                     stop_ev.set()
-        for err in _shared.get("errors", []):
+        for err in shared.get("errors", []):
             st.error(err)
-    time.sleep(0.5)
-    st.rerun()
+
+if _analysis_running:
+    _analysis_progress_fragment()
+
+# Ошибки завершившегося анализа показываем один раз
+for _err in st.session_state.pop("_analysis_errors", []):
+    st.error(_err)
 
 
 # ── Кнопка "Обработать выбранные" ────────────────────────────────────────────
@@ -521,7 +622,9 @@ unprocessed = [v for v in selected if v["status"] == "new"]
 
 top_cols = st.columns([3, 1])
 with top_cols[1]:
-    if unprocessed:
+    if _analysis_running:
+        st.button("⏳ Идёт обработка…", disabled=True, width='stretch')
+    elif unprocessed:
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот")
         elif st.button(f"🚀 Обработать ({len(unprocessed)})", type="primary", width='stretch'):
@@ -540,7 +643,9 @@ with list_col:
 
     new_active, do_reprocess = render_video_list(videos, st.session_state["active_idx"])
 
-    if do_reprocess:
+    if do_reprocess and _analysis_running:
+        st.warning("⏳ Дождись окончания текущей обработки")
+    elif do_reprocess:
         selected = [v for v in videos if v.get("selected", False)]
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот перед запуском")
