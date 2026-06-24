@@ -8,12 +8,15 @@ redirected so Streamlit doesn't show log lines as UI notifications.
 from __future__ import annotations
 
 import logging
-import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
 _LOG_FILE = Path(__file__).resolve().parent.parent / "app.log"
 _initialized = False
+
+# Шумные сторонние логгеры — их DEBUG раздувал app.log до мегабайтов HTTP-трафика.
+_NOISY = ("httpcore", "httpx", "urllib3", "huggingface_hub", "easyocr", "PIL", "matplotlib")
 
 
 def setup() -> None:
@@ -24,14 +27,22 @@ def setup() -> None:
     _initialized = True
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)-30s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler(_LOG_FILE, encoding="utf-8", mode="a"),
+            RotatingFileHandler(
+                _LOG_FILE, encoding="utf-8", mode="a",
+                maxBytes=2_000_000, backupCount=3,
+            ),
         ],
         force=True,
     )
+
+    # Наш код пишем подробно, сторонний шум — только предупреждения.
+    logging.getLogger("core").setLevel(logging.DEBUG)
+    for name in _NOISY:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     logging.captureWarnings(True)
     logging.getLogger(__name__).info("Logging initialised → %s", _LOG_FILE)

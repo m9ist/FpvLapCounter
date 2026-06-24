@@ -68,10 +68,16 @@ def _pass_time(p: Pass) -> float:
 
 
 def _lap_duration(start: Pass, end: Pass) -> float:
-    """Compute lap duration using OSD times when available, else video times."""
-    t_start = _pass_time(start)
-    t_end = _pass_time(end)
-    return t_end - t_start
+    """Compute lap duration.
+
+    OSD time (drone clock) and video time (frame-based) have different
+    origins, so they must not be mixed within a single subtraction. Use OSD
+    only when BOTH endpoints have it; otherwise fall back to video time for
+    both ends.
+    """
+    if start.osd_time is not None and end.osd_time is not None:
+        return end.osd_time - start.osd_time
+    return end.time_sec - start.time_sec
 
 
 # ---------------------------------------------------------------------------

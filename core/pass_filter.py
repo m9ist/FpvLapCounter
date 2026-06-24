@@ -51,6 +51,7 @@ class PassFilter:
         self._clf = None
         self.model_key: str = "dinov2_vit_b14"
         self.threshold: float = 0.4
+        self._device = None    # задаётся в load()
         self._embedder = None  # свой GateDetector, если активный детектор не совпадает
 
     def load(self, device: str | None = None) -> None:

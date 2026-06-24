@@ -111,7 +111,7 @@ def _init_state():
         "analysis_shared": None,    # dict | None — set by run_batch
         "analysis_stop": None,      # threading.Event | None
         # ── Club post-session workflow ───────────────────────────────────
-        "club_step": None,          # None | "preview"
+        "club_step": None,          # None | "preview" | "transfer"
         "club_source": None,        # source folder path (str)
     }
     for k, v in defaults.items():
@@ -184,19 +184,6 @@ def frames_cache_for(video_path: str) -> dict:
     if video_path not in st.session_state["frames_cache"]:
         st.session_state["frames_cache"][video_path] = {}
     return st.session_state["frames_cache"][video_path]
-
-
-def project_data_to_passes(data: ProjectData) -> list[Pass]:
-    return [
-        Pass(
-            frame=p.frame,
-            time_sec=p.time_sec,
-            osd_time=p.osd_time,
-            similarity=p.similarity,
-            verified=p.verified,
-        )
-        for p in data.passes
-    ]
 
 
 def _video_duration_sec(path: Path) -> float:

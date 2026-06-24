@@ -2,9 +2,12 @@
 Сохранение и загрузка результатов анализа видео в .fpv.json
 """
 import json
+import logging
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class PassData:
@@ -56,6 +59,9 @@ def load(video_path: str | Path) -> ProjectData | None:
         raw["laps"] = [LapData(**l) for l in raw.get("laps", [])]
         return ProjectData(**raw)
     except Exception:
+        # Повреждённый/несовместимый JSON: не маскируем под «нет данных» молча —
+        # видео повторно проанализируется, поэтому хотя бы фиксируем причину.
+        logger.warning("Не удалось прочитать %s — будет переанализ", path, exc_info=True)
         return None
 
 def exists(video_path: str | Path) -> bool:
