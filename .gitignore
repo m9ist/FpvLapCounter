@@ -68,3 +68,4 @@ refs/
 # Model usage stats and preferences (generated at runtime)
 storage/model_usage.json
 storage/last_model.json
+storage/last_device.json

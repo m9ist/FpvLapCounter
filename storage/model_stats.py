@@ -10,6 +10,7 @@ from pathlib import Path
 
 _STATS_FILE = Path(__file__).resolve().parent / "model_usage.json"
 _LAST_MODEL_FILE = Path(__file__).resolve().parent / "last_model.json"
+_LAST_DEVICE_FILE = Path(__file__).resolve().parent / "last_device.json"
 
 
 def load() -> dict[str, int]:
@@ -42,5 +43,21 @@ def save_last_model(model_key: str) -> None:
     """Persist the selected model key for next session."""
     _LAST_MODEL_FILE.write_text(
         json.dumps({"model": model_key}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def load_last_device() -> str | None:
+    """Return the last selected device key, or None if never saved."""
+    try:
+        return json.loads(_LAST_DEVICE_FILE.read_text(encoding="utf-8")).get("device")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def save_last_device(device: str) -> None:
+    """Persist the selected device key for next session."""
+    _LAST_DEVICE_FILE.write_text(
+        json.dumps({"device": device}, ensure_ascii=False),
         encoding="utf-8",
     )

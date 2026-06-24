@@ -72,6 +72,14 @@ def render_sidebar() -> dict:
         st.session_state["_sidebar_folder_input"] = ""
     if "sidebar_model_key" not in st.session_state:
         st.session_state["sidebar_model_key"] = model_stats.load_last_model() or DEFAULT_MODEL
+    if "available_devices" not in st.session_state:
+        # Перечисляем устройства один раз за сессию (ленивый импорт torch внутри).
+        from core.detector import available_devices
+        st.session_state["available_devices"] = available_devices()
+    if "sidebar_device" not in st.session_state:
+        _devs = [k for k, _ in st.session_state["available_devices"]]
+        _saved = model_stats.load_last_device()
+        st.session_state["sidebar_device"] = _saved if _saved in _devs else _devs[0]
     if "sidebar_threshold" not in st.session_state:
         st.session_state["sidebar_threshold"] = 0.60
     if "sidebar_min_lap_sec" not in st.session_state:
@@ -232,6 +240,26 @@ def render_sidebar() -> dict:
         info = MODELS[selected_key]
         st.caption(f"{info.speed_note} · {info.size_mb} МБ · {info.backend}")
 
+        # ── Device selector ─────────────────────────────────────────────
+        devices = st.session_state["available_devices"]
+        device_keys = [k for k, _ in devices]
+        device_labels = dict(devices)
+        try:
+            current_dev_idx = device_keys.index(st.session_state["sidebar_device"])
+        except ValueError:
+            current_dev_idx = 0
+
+        selected_device = st.selectbox(
+            "Видеокарта",
+            options=device_keys,
+            index=current_dev_idx,
+            format_func=lambda k: device_labels.get(k, k),
+            key="sidebar_device_select",
+            help="На каком устройстве запускать модель",
+        )
+        st.session_state["sidebar_device"] = selected_device
+        model_stats.save_last_device(selected_device)
+
         st.markdown("---")
 
         # ── Detection parameters ───────────────────────────────────────
@@ -325,6 +353,7 @@ def render_sidebar() -> dict:
     return {
         "folder": st.session_state.get("_sidebar_folder_input") or None,
         "model_key": st.session_state["sidebar_model_key"],
+        "device": st.session_state["sidebar_device"],
         "threshold": st.session_state["sidebar_threshold"],
         "min_lap_sec": st.session_state["sidebar_min_lap_sec"],
         "sample_every": st.session_state["sidebar_sample_every"],

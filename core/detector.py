@@ -15,6 +15,24 @@ from core.models import MODELS, ModelInfo
 logger = logging.getLogger(__name__)
 
 
+def available_devices() -> list[tuple[str, str]]:
+    """Доступные устройства для запуска модели.
+
+    Возвращает список (ключ, читаемая_подпись): сначала каждый GPU, затем CPU.
+    Импорт torch ленивый — вызывать редко (результат лучше закешировать).
+    """
+    devices: list[tuple[str, str]] = []
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                devices.append((f"cuda:{i}", f"GPU {i}: {torch.cuda.get_device_name(i)}"))
+    except Exception:
+        logger.exception("Не удалось перечислить CUDA-устройства")
+    devices.append(("cpu", "CPU"))
+    return devices
+
+
 class GateDetector:
     """
     Detects FPV gate passes by comparing frame embeddings against
@@ -45,11 +63,16 @@ class GateDetector:
     # Loading
     # ------------------------------------------------------------------
 
-    def load(self) -> None:
-        """Load the backbone and move it to GPU if available."""
+    def load(self, device: str | None = None) -> None:
+        """Load the backbone and move it to the chosen device.
+
+        device : "cuda", "cuda:N", "cpu" or None (auto — first GPU or CPU).
+        """
         import torch
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device and device.startswith("cuda") and not torch.cuda.is_available():
+            device = "cpu"
+        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(
             "Loading model '%s' (backend=%s) on %s …",
             self.info.name,
