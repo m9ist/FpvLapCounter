@@ -17,52 +17,8 @@ try:
 except ImportError:
     _PLOTLY_OK = False
 
-from core.osd_reader import OSDRegion, DEFAULT_REGION
+from core.frames import load_frame_cached as _load_frame
 from storage.project import PassData
-
-
-# Maximum frames to keep in the cache dict
-_CACHE_LIMIT = 200
-
-
-# ---------------------------------------------------------------------------
-# Frame loading helper
-# ---------------------------------------------------------------------------
-
-def _load_frame(video_path: str, frame_idx: int, frames_cache: dict) -> np.ndarray | None:
-    """Load frame_idx from video, using / populating frames_cache.
-
-    HEVC (.ts) videos use B-frames with long GOPs.  A bare seek to frame_idx
-    often lands mid-GOP without the required reference frames, producing
-    corrupted output.  We seek back GOP_WARMUP frames and decode sequentially
-    so the decoder can reconstruct all necessary reference frames first.
-    """
-    if frame_idx in frames_cache:
-        return frames_cache[frame_idx]
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    try:
-        GOP_WARMUP = 60  # ~2 s at 30 fps; covers typical HEVC GOP size
-        seek_to = max(0, frame_idx - GOP_WARMUP)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, seek_to)
-        frame = None
-        for _ in range(frame_idx - seek_to + 1):
-            ret, f = cap.read()
-            if not ret:
-                break
-            frame = f
-        if frame is None:
-            return None
-        # Evict oldest entries if cache is full
-        if len(frames_cache) >= _CACHE_LIMIT:
-            oldest_key = next(iter(frames_cache))
-            del frames_cache[oldest_key]
-        frames_cache[frame_idx] = frame
-        return frame
-    finally:
-        cap.release()
 
 
 def _video_info(video_path: str) -> tuple[float, int]:
@@ -98,7 +54,6 @@ def render_graph_tab(
     params: dict,
     frames_cache: dict,
     on_use_as_ref: Callable,
-    on_set_osd_region: Callable,
 ) -> None:
     """
     Render the similarity graph and frame viewer for one video.
@@ -112,7 +67,6 @@ def render_graph_tab(
     params         : Dict with 'threshold' key (float).
     frames_cache   : Mutable dict {frame_idx: bgr_frame}.
     on_use_as_ref  : Callable(bgr_frame) — user wants this frame as a reference.
-    on_set_osd_region : Callable(OSDRegion) — user configured the OSD region.
     """
     fps, total_frames = _video_info(video_path)
     if total_frames == 0:
@@ -163,7 +117,6 @@ def render_graph_tab(
         frames_cache=frames_cache,
         sk_frame=sk_frame,
         on_use_as_ref=on_use_as_ref,
-        on_set_osd_region=on_set_osd_region,
     )
 
 
@@ -312,7 +265,6 @@ def _render_frame_viewer(
     frames_cache: dict,
     sk_frame: str,
     on_use_as_ref: Callable,
-    on_set_osd_region: Callable,
 ) -> None:
     current_frame: int = int(st.session_state.get(sk_frame, 0))
     current_frame = max(0, min(current_frame, total_frames - 1))
@@ -399,25 +351,3 @@ def _render_frame_viewer(
                 st.success("Кадр добавлен как референс")
             else:
                 st.warning("Нет кадра для добавления")
-
-        # OSD region configurator
-        with st.expander("✂️ Настроить регион OSD"):
-            st.caption("Координаты в долях от размера кадра (0..1)")
-            osd_x = st.number_input("X (лево)", 0.0, 1.0, DEFAULT_REGION.x, step=0.01, key=f"osd_x_{sk_frame}")
-            osd_y = st.number_input("Y (верх)", 0.0, 1.0, DEFAULT_REGION.y, step=0.01, key=f"osd_y_{sk_frame}")
-            osd_w = st.number_input("Ширина", 0.01, 1.0, DEFAULT_REGION.w, step=0.01, key=f"osd_w_{sk_frame}")
-            osd_h = st.number_input("Высота", 0.01, 1.0, DEFAULT_REGION.h, step=0.01, key=f"osd_h_{sk_frame}")
-            if st.button("Применить регион OSD", key=f"osd_apply_{sk_frame}", width='stretch'):
-                region = OSDRegion(x=osd_x, y=osd_y, w=osd_w, h=osd_h)
-                on_set_osd_region(region)
-                st.success("Регион OSD обновлён")
-
-            # Preview: draw OSD rectangle on current frame
-            if frame_bgr is not None:
-                preview = frame_bgr.copy()
-                h_px, w_px = preview.shape[:2]
-                region_preview = OSDRegion(x=osd_x, y=osd_y, w=osd_w, h=osd_h)
-                x0, y0, x1, y1 = region_preview.to_pixels(h_px, w_px)
-                cv2.rectangle(preview, (x0, y0), (x1, y1), (0, 255, 0), 2)
-                preview_rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
-                st.image(preview_rgb, caption="Предпросмотр OSD-региона", width='stretch')

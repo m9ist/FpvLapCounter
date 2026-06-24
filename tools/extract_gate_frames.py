@@ -13,29 +13,20 @@ HEVC .ts плохо перематываются в OpenCV (битые кадр�
 import glob
 import json
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2
 
+from core.frames import grab_frame as grab
+
 ROOT = r"D:/fpv/!video"
 OUT = r"D:/fpv/!gate_dataset"
-SEEK_BACK = 90  # кадров отмотать назад перед докруткой (~1.5 c при 60 fps)
 
 
 def _safe(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in s)
-
-
-def grab(cap, fno: int):
-    """Чистый кадр fno: отмотать назад и докрутить вперёд."""
-    start = max(0, fno - SEEK_BACK)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-    frame = None
-    for _ in range(start, fno + 1):
-        ok, fr = cap.read()
-        if not ok:
-            break
-        frame = fr
-    return frame
 
 
 def imwrite(path: str, img) -> None:

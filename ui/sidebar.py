@@ -61,9 +61,8 @@ def render_sidebar() -> dict:
     Returns
     -------
     dict with keys:
-        folder, model_key, threshold, min_lap_sec, sample_every,
-        prominence, regularity_filter, regularity_tolerance,
-        best_n, refs
+        folder, model_key, device, threshold, min_lap_sec, sample_every,
+        prominence, best_n, smart_filter, refs
     """
     # Initialise session state on first run
     if "sidebar_refs" not in st.session_state:
@@ -92,10 +91,6 @@ def render_sidebar() -> dict:
         st.session_state["sidebar_smart_filter"] = bool(
             model_stats.load_setting("smart_filter", True)
         )
-    if "sidebar_regularity_filter" not in st.session_state:
-        st.session_state["sidebar_regularity_filter"] = False
-    if "sidebar_regularity_tolerance" not in st.session_state:
-        st.session_state["sidebar_regularity_tolerance"] = 0.30
     if "sidebar_best_n" not in st.session_state:
         st.session_state["sidebar_best_n"] = 3
 
@@ -334,31 +329,6 @@ def render_sidebar() -> dict:
 
         st.markdown("---")
 
-        # ── Regularity filter ──────────────────────────────────────────
-        st.subheader("📐 Фильтр регулярности")
-
-        regularity_filter = st.toggle(
-            "Фильтровать нерегулярные круги",
-            value=st.session_state["sidebar_regularity_filter"],
-            key="sidebar_regularity_toggle",
-            help="Убрать выбросы по времени круга",
-        )
-        st.session_state["sidebar_regularity_filter"] = regularity_filter
-
-        regularity_tolerance = st.slider(
-            "Допуск отклонения",
-            min_value=0.05,
-            max_value=1.0,
-            value=st.session_state["sidebar_regularity_tolerance"],
-            step=0.05,
-            key="sidebar_regularity_tol_slider",
-            help="Макс. относительное отклонение от медианного круга (0.3 = 30%)",
-            disabled=not regularity_filter,
-        )
-        st.session_state["sidebar_regularity_tolerance"] = regularity_tolerance
-
-        st.markdown("---")
-
         # ── Best N consecutive laps ────────────────────────────────────
         st.subheader("🏆 Лучшие N подряд")
 
@@ -382,8 +352,6 @@ def render_sidebar() -> dict:
         "sample_every": st.session_state["sidebar_sample_every"],
         "prominence": st.session_state["sidebar_prominence"],
         "smart_filter": st.session_state["sidebar_smart_filter"],
-        "regularity_filter": st.session_state["sidebar_regularity_filter"],
-        "regularity_tolerance": st.session_state["sidebar_regularity_tolerance"],
         "best_n": st.session_state["sidebar_best_n"],
         "refs": list(st.session_state["sidebar_refs"]),
     }

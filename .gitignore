@@ -17,6 +17,7 @@ ENV/
 
 # App logs
 app.log
+app.log.*
 
 # FPV result files (generated, not source)
 *.fpv.json

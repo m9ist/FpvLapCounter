@@ -11,37 +11,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "storage" / "pass_classifier.joblib"
-SEEK_BACK = 90  # кадров назад перед докруткой (чистый кадр на HEVC .ts)
 
 
 def model_available() -> bool:
     return MODEL_PATH.exists()
-
-
-def grab_frames(video_path: str, frame_numbers: list[int]) -> list[np.ndarray]:
-    """Чистые кадры по номерам (перемотка назад + докрутка — против битых HEVC-сидов)."""
-    cap = cv2.VideoCapture(video_path)
-    out: list[np.ndarray] = []
-    try:
-        for fno in frame_numbers:
-            start = max(0, fno - SEEK_BACK)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-            frame = None
-            for _ in range(start, fno + 1):
-                ok, fr = cap.read()
-                if not ok:
-                    break
-                frame = fr
-            out.append(frame)
-    finally:
-        cap.release()
-    return out
 
 
 class PassFilter:

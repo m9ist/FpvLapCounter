@@ -19,7 +19,6 @@ from datetime import datetime
 
 from core.models import MODELS, DEFAULT_MODEL
 from core.detector import GateDetector, find_passes
-from core.osd_reader import OSDReader, OSDRegion, DEFAULT_REGION
 from core.lap_analyzer import Pass, analyze
 from storage import project as proj
 from storage.project import ProjectData, PassData, LapData
@@ -100,8 +99,8 @@ def _init_state():
         "detector": None,       # loaded GateDetector
         "detector_model": None, # which model is loaded
         "detector_device": None, # on which device it is loaded
-        "osd_reader": None,
         "pass_filter": None,    # loaded PassFilter (или False, если модели нет)
+        "pass_filter_device": None, # на каком устройстве загружен фильтр
         "frames_cache": {},     # video_path -> {frame_idx: bgr}
         "similarities": {},     # video_path -> np.ndarray
         "timestamps": {},       # video_path -> np.ndarray
@@ -160,23 +159,18 @@ def get_detector(model_key: str, device: str | None = None) -> GateDetector:
     return st.session_state["detector"]
 
 
-def get_osd_reader() -> OSDReader:
-    if st.session_state["osd_reader"] is None:
-        with st.spinner("Загрузка EasyOCR..."):
-            st.session_state["osd_reader"] = OSDReader(use_gpu=True)
-    return st.session_state["osd_reader"]
-
-
 def get_pass_filter(device: str | None = None):
     """Загруженный фильтр ложных пролётов, или None если модель не обучена."""
     from core import pass_filter as pf
     if not pf.model_available():
         return None
-    if not st.session_state.get("pass_filter"):
+    if (not st.session_state.get("pass_filter")
+            or st.session_state.get("pass_filter_device") != device):
         flt = pf.PassFilter()
         with st.spinner("Загрузка фильтра ложных пролётов…"):
             flt.load(device)
         st.session_state["pass_filter"] = flt
+        st.session_state["pass_filter_device"] = device
     return st.session_state["pass_filter"]
 
 
@@ -290,7 +284,6 @@ def run_batch(
     # Прогрев тяжёлых объектов в основном потоке (со спиннерами),
     # захватываем прямые ссылки — поток не должен трогать session_state.
     det = get_detector(cfg["model_key"], cfg.get("device"))
-    osd = get_osd_reader()
     pass_filter = get_pass_filter(cfg.get("device")) if cfg.get("smart_filter", True) else None
     similarities_dict = st.session_state["similarities"]
     timestamps_dict = st.session_state["timestamps"]
@@ -319,7 +312,7 @@ def run_batch(
             shared["inner"] = 0.0
             try:
                 run_analysis(
-                    v, cfg, refs, det, osd,
+                    v, cfg, refs, det,
                     similarities_dict, timestamps_dict,
                     stop_event=stop_event,
                     on_inner_progress=lambda p: shared.__setitem__("inner", p),
@@ -347,7 +340,6 @@ def run_analysis(
     cfg: dict,
     refs: list[RefImage],
     det,                              # GateDetector — передаётся напрямую
-    osd,                              # OSDReader — передаётся напрямую
     similarities_dict: dict,          # ссылка на st.session_state["similarities"]
     timestamps_dict: dict,            # ссылка на st.session_state["timestamps"]
     stop_event: threading.Event | None = None,
@@ -392,30 +384,22 @@ def run_analysis(
 
     # Отсев ложных пролётов обученным классификатором (если включён и доступен).
     if pass_filter is not None and len(peak_idxs):
-        from core.pass_filter import grab_frames
+        from core.frames import grab_frames
         peak_frames_no = [int(ts[i] * fps) for i in peak_idxs]
         cand = grab_frames(video_path, peak_frames_no)
         keep, _ = pass_filter.keep_mask(cand, detector=det)
         peak_idxs = peak_idxs[keep]
 
-    # OCR на кадрах-кандидатах
-    osd_region = None  # TODO: per-video region
-    passes_data = []
-
-    cap = cv2.VideoCapture(video_path)
-    for idx in peak_idxs:
-        frame_no = int(ts[idx] * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-        ret, frame = cap.read()
-        osd_time = osd.read_frame(frame, osd_region) if ret else None
-        passes_data.append(PassData(
-            frame=frame_no,
+    # Кандидаты-пролёты (время круга считаем по видео-таймкоду)
+    passes_data = [
+        PassData(
+            frame=int(ts[idx] * fps),
             time_sec=float(ts[idx]),
-            osd_time=osd_time,
             similarity=float(sims[idx]),
             verified=None,
-        ))
-    cap.release()
+        )
+        for idx in peak_idxs
+    ]
 
     # Расчёт кругов
     passes_for_lap = project_data_to_passes_from_data(passes_data)
@@ -426,7 +410,6 @@ def run_analysis(
             number=l.number,
             duration_sec=l.duration_sec,
             start_sec=l.start_pass.time_sec,
-            osd_start=l.start_pass.osd_time,
         )
         for l in result.laps
     ]
@@ -452,7 +435,6 @@ def run_analysis(
             "prominence": cfg["prominence"],
             "smart_filter": bool(pass_filter is not None),
         },
-        osd_region=None,
         passes=passes_data,
         laps=laps_data,
         best_lap_idx=best_lap_idx,
@@ -472,7 +454,6 @@ def project_data_to_passes_from_data(passes_data: list[PassData]) -> list[Pass]:
         Pass(
             frame=p.frame,
             time_sec=p.time_sec,
-            osd_time=p.osd_time,
             similarity=p.similarity,
             verified=p.verified,
         )
@@ -717,11 +698,6 @@ with content_col:
         save_ref_to_history(ref)
         st.toast("✅ Кадр добавлен как референс")
 
-    def on_set_osd_region(region: OSDRegion):
-        if data:
-            data.osd_region = {"x": region.x, "y": region.y, "w": region.w, "h": region.h}
-            proj.save(data, video_path)
-
     def on_verified_change(pass_idx: int, value: bool | None):
         if data and 0 <= pass_idx < len(data.passes):
             data.passes[pass_idx].verified = value
@@ -729,7 +705,7 @@ with content_col:
             passes_for_lap = project_data_to_passes_from_data(data.passes)
             result = analyze(passes_for_lap, best_ns=[1, 3, 5])
             data.laps = [
-                LapData(l.number, l.duration_sec, l.start_pass.time_sec, l.start_pass.osd_time)
+                LapData(l.number, l.duration_sec, l.start_pass.time_sec)
                 for l in result.laps
             ]
             proj.save(data, video_path)
@@ -738,7 +714,7 @@ with content_col:
 
     def on_smart_filter():
         """Прогнать классификатор по текущим кандидатам и пометить ✅/❌."""
-        from core.pass_filter import grab_frames
+        from core.frames import grab_frames
         flt = get_pass_filter(cfg.get("device"))
         if flt is None or not data or not data.passes:
             return None
@@ -764,7 +740,6 @@ with content_col:
             params=cfg,
             frames_cache=frames_cache,
             on_use_as_ref=on_use_as_ref,
-            on_set_osd_region=on_set_osd_region,
         )
 
     with tab_verify:

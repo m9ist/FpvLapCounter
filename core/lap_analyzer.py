@@ -17,7 +17,6 @@ class Pass:
     """A single detected gate pass."""
     frame: int
     time_sec: float               # absolute video timestamp (seconds)
-    osd_time: float | None        # timer value read from OSD (seconds), or None
     similarity: float             # cosine similarity score at this pass
     verified: bool | None = None  # True/False if manually verified; None = unknown
 
@@ -60,23 +59,12 @@ class LapResult:
 # ---------------------------------------------------------------------------
 
 def _pass_time(p: Pass) -> float:
-    """Return the best available absolute timestamp for a pass."""
-    # Prefer OSD time because it is measured by the drone's own clock
-    if p.osd_time is not None:
-        return p.osd_time
+    """Return the absolute video timestamp for a pass."""
     return p.time_sec
 
 
 def _lap_duration(start: Pass, end: Pass) -> float:
-    """Compute lap duration.
-
-    OSD time (drone clock) and video time (frame-based) have different
-    origins, so they must not be mixed within a single subtraction. Use OSD
-    only when BOTH endpoints have it; otherwise fall back to video time for
-    both ends.
-    """
-    if start.osd_time is not None and end.osd_time is not None:
-        return end.osd_time - start.osd_time
+    """Lap duration as the gap between two passes' video timestamps."""
     return end.time_sec - start.time_sec
 
 
@@ -89,8 +77,7 @@ def compute_laps(passes: list[Pass]) -> list[Lap]:
     Compute sequential laps from a list of gate passes.
 
     Only passes where ``verified`` is not ``False`` are used.
-    Duration is computed using the OSD timestamp when available for both
-    endpoints, otherwise the video timestamp is used.
+    Duration is computed from the video timestamps.
 
     Parameters
     ----------

@@ -7,13 +7,10 @@ from __future__ import annotations
 from typing import Callable
 
 import cv2
-import numpy as np
 import streamlit as st
 
+from core.frames import load_frame_cached as _load_frame
 from storage.project import PassData
-
-
-_CACHE_LIMIT = 200
 
 
 def _build_css(passes: list) -> str:
@@ -91,38 +88,6 @@ def _build_css(passes: list) -> str:
     return f'<style>{"".join(rules)}</style>' if rules else ''
 
 
-def _load_frame(video_path: str, frame_idx: int, frames_cache: dict) -> np.ndarray | None:
-    """Load a specific frame from video, using cache.
-
-    HEVC (.ts) videos use B-frames with long GOPs.  A bare seek to frame_idx
-    often lands mid-GOP without the required reference frames, producing
-    corrupted output.  We seek back GOP_WARMUP frames and decode sequentially
-    so the decoder can reconstruct all necessary reference frames first.
-    """
-    if frame_idx in frames_cache:
-        return frames_cache[frame_idx]
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    try:
-        GOP_WARMUP = 60  # ~2 s at 30 fps; covers typical HEVC GOP size
-        seek_to = max(0, frame_idx - GOP_WARMUP)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, seek_to)
-        frame = None
-        for _ in range(frame_idx - seek_to + 1):
-            ret, f = cap.read()
-            if not ret:
-                break
-            frame = f
-        if frame is None:
-            return None
-        if len(frames_cache) >= _CACHE_LIMIT:
-            oldest = next(iter(frames_cache))
-            del frames_cache[oldest]
-        frames_cache[frame_idx] = frame
-        return frame
-    finally:
-        cap.release()
 
 
 def render_verify_tab(
@@ -281,9 +246,8 @@ def _render_pass_card(
         seconds = t - minutes * 60
         time_str = f"{minutes:02d}:{seconds:05.2f}"
 
-        osd_str = f" | OSD: {pass_data.osd_time:.2f}с" if pass_data.osd_time is not None else ""
         st.caption(
-            f"**#{pass_idx + 1}** · {time_str}{osd_str}\n\n"
+            f"**#{pass_idx + 1}** · {time_str}\n\n"
             f"Сходство: {pass_data.similarity:.3f}"
         )
 
