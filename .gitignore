@@ -69,3 +69,4 @@ refs/
 storage/model_usage.json
 storage/last_model.json
 storage/last_device.json
+storage/settings.json

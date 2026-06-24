@@ -11,6 +11,7 @@ from pathlib import Path
 _STATS_FILE = Path(__file__).resolve().parent / "model_usage.json"
 _LAST_MODEL_FILE = Path(__file__).resolve().parent / "last_model.json"
 _LAST_DEVICE_FILE = Path(__file__).resolve().parent / "last_device.json"
+_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 
 def load() -> dict[str, int]:
@@ -61,3 +62,21 @@ def save_last_device(device: str) -> None:
         json.dumps({"device": device}, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def load_setting(key: str, default=None):
+    """Return a persisted UI setting, or default."""
+    try:
+        return json.loads(_SETTINGS_FILE.read_text(encoding="utf-8")).get(key, default)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+
+def save_setting(key: str, value) -> None:
+    """Persist a single UI setting (merged into settings.json)."""
+    try:
+        data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    data[key] = value
+    _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

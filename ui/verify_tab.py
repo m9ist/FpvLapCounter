@@ -131,6 +131,7 @@ def render_verify_tab(
     frames_cache: dict,
     on_verified_change: Callable,  # (pass_idx: int, value: bool | None) -> None
     on_use_as_ref: Callable,       # (bgr_frame: np.ndarray) -> None
+    on_smart_filter: Callable | None = None,  # () -> n_marked_fake | None
 ) -> None:
     """
     Render a verification grid for all detected gate pass candidates.
@@ -197,23 +198,31 @@ def render_verify_tab(
         return
 
     # ── Bulk action buttons ────────────────────────────────────────────
-    col_all, col_fake, col_reset = st.columns(3)
-    with col_all:
+    cols = st.columns(4 if on_smart_filter else 3)
+    with cols[0]:
         if st.button("✅ Подтвердить все", key="verify_all_btn", width='stretch'):
             for i in range(len(passes)):
                 on_verified_change(i, True)
             st.rerun()
-    with col_fake:
+    with cols[1]:
         if st.button("❌ Непроверенные — фейк", key="verify_all_fake_btn", width='stretch'):
             for i, p in enumerate(passes):
                 if p.verified is None:
                     on_verified_change(i, False)
             st.rerun()
-    with col_reset:
+    with cols[2]:
         if st.button("🔄 Сбросить верификацию", key="verify_reset_btn", width='stretch'):
             for i in range(len(passes)):
                 on_verified_change(i, None)
             st.rerun()
+    if on_smart_filter:
+        with cols[3]:
+            if st.button("🧠 Умный фильтр", key="verify_smart_btn", width='stretch',
+                         help="Классификатор пометит фейки ❌; остальных не трогает"):
+                res = on_smart_filter()
+                if res is not None:
+                    st.toast(f"🧠 Помечено фейком: {res}")
+                st.rerun()
 
     st.markdown(f"**Всего кандидатов: {len(passes)}**")
     st.markdown("---")

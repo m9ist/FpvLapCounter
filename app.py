@@ -101,6 +101,7 @@ def _init_state():
         "detector_model": None, # which model is loaded
         "detector_device": None, # on which device it is loaded
         "osd_reader": None,
+        "pass_filter": None,    # loaded PassFilter (или False, если модели нет)
         "frames_cache": {},     # video_path -> {frame_idx: bgr}
         "similarities": {},     # video_path -> np.ndarray
         "timestamps": {},       # video_path -> np.ndarray
@@ -164,6 +165,19 @@ def get_osd_reader() -> OSDReader:
         with st.spinner("Загрузка EasyOCR..."):
             st.session_state["osd_reader"] = OSDReader(use_gpu=True)
     return st.session_state["osd_reader"]
+
+
+def get_pass_filter(device: str | None = None):
+    """Загруженный фильтр ложных пролётов, или None если модель не обучена."""
+    from core import pass_filter as pf
+    if not pf.model_available():
+        return None
+    if not st.session_state.get("pass_filter"):
+        flt = pf.PassFilter()
+        with st.spinner("Загрузка фильтра ложных пролётов…"):
+            flt.load(device)
+        st.session_state["pass_filter"] = flt
+    return st.session_state["pass_filter"]
 
 
 def frames_cache_for(video_path: str) -> dict:
@@ -290,6 +304,7 @@ def run_batch(
     # захватываем прямые ссылки — поток не должен трогать session_state.
     det = get_detector(cfg["model_key"], cfg.get("device"))
     osd = get_osd_reader()
+    pass_filter = get_pass_filter(cfg.get("device")) if cfg.get("smart_filter", True) else None
     similarities_dict = st.session_state["similarities"]
     timestamps_dict = st.session_state["timestamps"]
 
@@ -321,6 +336,7 @@ def run_batch(
                     similarities_dict, timestamps_dict,
                     stop_event=stop_event,
                     on_inner_progress=lambda p: shared.__setitem__("inner", p),
+                    pass_filter=pass_filter,
                 )
             except _StopAnalysis:
                 shared["status"] = f"⏹ Остановлено: {v['name']}"
@@ -349,6 +365,7 @@ def run_analysis(
     timestamps_dict: dict,            # ссылка на st.session_state["timestamps"]
     stop_event: threading.Event | None = None,
     on_inner_progress=None,           # callable(float 0‥1) | None
+    pass_filter=None,                 # PassFilter | None — отсев ложных пролётов
 ) -> None:
     """Запускает полный анализ одного видео и сохраняет результат.
 
@@ -385,6 +402,14 @@ def run_analysis(
         min_lap_sec=cfg["min_lap_sec"],
         prominence=cfg["prominence"],
     )
+
+    # Отсев ложных пролётов обученным классификатором (если включён и доступен).
+    if pass_filter is not None and len(peak_idxs):
+        from core.pass_filter import grab_frames
+        peak_frames_no = [int(ts[i] * fps) for i in peak_idxs]
+        cand = grab_frames(video_path, peak_frames_no)
+        keep, _ = pass_filter.keep_mask(cand, detector=det)
+        peak_idxs = peak_idxs[keep]
 
     # OCR на кадрах-кандидатах
     osd_region = None  # TODO: per-video region
@@ -438,6 +463,7 @@ def run_analysis(
             "min_lap_sec": cfg["min_lap_sec"],
             "sample_every": cfg["sample_every"],
             "prominence": cfg["prominence"],
+            "smart_filter": bool(pass_filter is not None),
         },
         osd_region=None,
         passes=passes_data,
@@ -723,6 +749,20 @@ with content_col:
             active_video["lap_count"] = len(data.laps)
             active_video["status"] = "done" if data.laps else "no_laps"
 
+    def on_smart_filter():
+        """Прогнать классификатор по текущим кандидатам и пометить ✅/❌."""
+        from core.pass_filter import grab_frames
+        flt = get_pass_filter(cfg.get("device"))
+        if flt is None or not data or not data.passes:
+            return None
+        frames = grab_frames(video_path, [p.frame for p in data.passes])
+        mask, _ = flt.keep_mask(frames)  # свой DINOv2-эмбеддер, независимо от выбранной модели
+        # Помечаем только фейки (❌); остальных не трогаем — подтверждаешь сам.
+        for i, keep in enumerate(mask):
+            if not keep:
+                on_verified_change(i, False)
+        return int((~mask).sum())
+
     # Вкладки
     tab_graph, tab_verify, tab_laps, tab_compare = st.tabs(
         ["📈 График", "✅ Верификация", "🏆 Круги", "📊 Сравнение"]
@@ -741,12 +781,14 @@ with content_col:
         )
 
     with tab_verify:
+        from core.pass_filter import model_available as _pf_available
         render_verify_tab(
             video_path=video_path,
             passes=data.passes,
             frames_cache=frames_cache,
             on_verified_change=on_verified_change,
             on_use_as_ref=on_use_as_ref,
+            on_smart_filter=on_smart_filter if _pf_available() else None,
         )
 
     with tab_laps:

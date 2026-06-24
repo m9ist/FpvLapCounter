@@ -88,6 +88,10 @@ def render_sidebar() -> dict:
         st.session_state["sidebar_sample_every"] = 3
     if "sidebar_prominence" not in st.session_state:
         st.session_state["sidebar_prominence"] = 0.05
+    if "sidebar_smart_filter" not in st.session_state:
+        st.session_state["sidebar_smart_filter"] = bool(
+            model_stats.load_setting("smart_filter", True)
+        )
     if "sidebar_regularity_filter" not in st.session_state:
         st.session_state["sidebar_regularity_filter"] = False
     if "sidebar_regularity_tolerance" not in st.session_state:
@@ -311,6 +315,25 @@ def render_sidebar() -> dict:
 
         st.markdown("---")
 
+        # ── Smart false-positive filter ────────────────────────────────
+        from core.pass_filter import model_available as _pf_available
+        st.subheader("🧠 Умный фильтр ложных")
+        smart_filter = st.toggle(
+            "Отсеивать ложные пролёты",
+            value=st.session_state["sidebar_smart_filter"],
+            key="sidebar_smart_filter_toggle",
+            help="Обученный классификатор отсекает кандидаты, не похожие на пролёт "
+                 "через стартовые ворота (~−90% ложных).",
+            disabled=not _pf_available(),
+        )
+        if smart_filter != st.session_state["sidebar_smart_filter"]:
+            model_stats.save_setting("smart_filter", smart_filter)
+        st.session_state["sidebar_smart_filter"] = smart_filter
+        if not _pf_available():
+            st.caption("Модель не обучена — см. tools/train_pass_classifier.py")
+
+        st.markdown("---")
+
         # ── Regularity filter ──────────────────────────────────────────
         st.subheader("📐 Фильтр регулярности")
 
@@ -358,6 +381,7 @@ def render_sidebar() -> dict:
         "min_lap_sec": st.session_state["sidebar_min_lap_sec"],
         "sample_every": st.session_state["sidebar_sample_every"],
         "prominence": st.session_state["sidebar_prominence"],
+        "smart_filter": st.session_state["sidebar_smart_filter"],
         "regularity_filter": st.session_state["sidebar_regularity_filter"],
         "regularity_tolerance": st.session_state["sidebar_regularity_tolerance"],
         "best_n": st.session_state["sidebar_best_n"],
