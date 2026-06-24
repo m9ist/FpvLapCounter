@@ -325,16 +325,20 @@ def render_compare_tab(
 
     # ── Open in player buttons ─────────────────────────────────────────
     st.markdown("**▶ Открыть в плеере:**")
-    btn_cols = st.columns(max(len(rows), 1))
-    for i, (row, col) in enumerate(zip(rows, btn_cols)):
-        short = row["Видео"][:25]
-        with col:
-            if st.button(short, key=f"open_video_{i}", width='stretch',
-                         help=row["_path"]):
-                try:
-                    os.startfile(row["_path"])
-                except Exception as exc:
-                    st.error(f"Не удалось открыть файл: {exc}")
+    cols_per_row = 4
+    for row_start in range(0, len(rows), cols_per_row):
+        chunk = rows[row_start : row_start + cols_per_row]
+        btn_cols = st.columns(cols_per_row)
+        for col_i, row in enumerate(chunk):
+            i = row_start + col_i
+            short = row["Видео"][:25]
+            with btn_cols[col_i]:
+                if st.button(short, key=f"open_video_{i}", width='stretch',
+                             help=row["_path"]):
+                    try:
+                        os.startfile(row["_path"])
+                    except Exception as exc:
+                        st.error(f"Не удалось открыть файл: {exc}")
 
     # ── Delete unchecked videos ────────────────────────────────────────
     _SK_DEL = "compare_delete_paths"
