@@ -107,10 +107,10 @@ def render_verify_tab(
 
     # ── Floating scroll buttons ────────────────────────────────────────
     # st.markdown innerHTML never executes <script> tags (browser security).
-    # st.components.v1.html() renders an iframe where JS *does* run.
+    # st.iframe() renders an iframe where JS *does* run.
     # From the iframe we reach window.parent.document to inject buttons
     # directly into the Streamlit page and scroll section.stMain.
-    st.components.v1.html("""
+    st.iframe("""
 <script>
 (function () {
     var doc = window.parent.document;
@@ -148,7 +148,7 @@ def render_verify_tab(
     btn('fpv-scroll-bot', '26px', '\u0412\u043d\u0438\u0437',  true);
 }());
 </script>
-""", height=0)
+""", height=1)  # 0 st.iframe не принимает (в отличие от components.v1.html)
 
     if not passes:
         st.info("Нет обнаруженных пролётов для верификации. Запустите анализ.")
