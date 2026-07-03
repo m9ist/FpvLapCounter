@@ -660,6 +660,7 @@ def _video_list_body():
                 st.session_state["similarities"].pop(v["path"], None)
                 st.session_state["timestamps"].pop(v["path"], None)
                 st.session_state["frames_cache"].pop(v["path"], None)
+                st.session_state.get("_verify_thumb_cache", {}).pop(v["path"], None)
             # Запускаем анализ (поток стартует, polling loop подхватит)
             run_batch(selected, cfg, refs)
             st.rerun()  # войти в polling loop (полный rerun и из фрагмента)

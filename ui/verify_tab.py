@@ -167,9 +167,9 @@ def render_verify_tab(
                 on_verified_change(i, False)
 
     def _smart() -> None:
-        res = on_smart_filter()
-        if res is not None:
-            st.toast(f"🧠 Помечено фейком: {res}")
+        # st.-команды в колбэке фрагмента не поддерживаются — тост
+        # показывает тело фрагмента на следующем прогоне.
+        st.session_state["_smart_filter_n"] = on_smart_filter()
 
     cols = st.columns(4 if on_smart_filter else 3)
     with cols[0]:
@@ -186,6 +186,10 @@ def render_verify_tab(
             st.button("🧠 Умный фильтр", key="verify_smart_btn", width='stretch',
                       help="Классификатор пометит фейки ❌; остальных не трогает",
                       on_click=_smart)
+
+    _smart_n = st.session_state.pop("_smart_filter_n", None)
+    if _smart_n is not None:
+        st.toast(f"🧠 Помечено фейком: {_smart_n}")
 
     st.markdown(f"**Всего кандидатов: {len(passes)}**")
     st.markdown("---")

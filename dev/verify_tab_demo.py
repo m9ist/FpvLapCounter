@@ -27,8 +27,9 @@ if "demo_passes" not in st.session_state:
     data = proj.load(Path(VIDEO))
     passes = data.passes[:N]
     # в реальном JSON всё верифицировано — сбрасываем пару для демо «не проверен»
-    passes[1].verified = None
-    passes[5].verified = None
+    for _idx in (1, 5):
+        if _idx < len(passes):
+            passes[_idx].verified = None
     st.session_state["demo_passes"] = passes
     st.session_state["demo_cache"] = {}
 
