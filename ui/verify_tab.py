@@ -27,11 +27,28 @@ def _build_css(passes: list) -> str:
     """
     rules: list[str] = []
 
+    # Дизайн-прототип: dev/verify_proto_v2.html.
+    # Фон на всю карточку; рамка одинаковой толщины во всех состояниях
+    # (у ok/bad прозрачная), чтобы смена статуса не сдвигала вёрстку.
+    # «Не проверен» — контрастный янтарный фон + красная рамка.
     color_map = {
-        True:  ("#28a745", "rgba(40,167,69,0.12)"),
-        False: ("#dc3545", "rgba(220,53,69,0.10)"),
-        None:  ("#6c757d", "transparent"),
+        True:  ("transparent", "rgba(33,163,102,0.14)"),
+        False: ("transparent", "rgba(224,67,85,0.11)"),
+        None:  ("#e04355", "#ffe08a"),
     }
+
+    # Мета-строка и статус-плашка фиксированной высоты — кнопки не «прыгают».
+    rules.append(
+        '.fpv-meta{height:20px;line-height:20px;font-size:13px;color:#55596a;'
+        'margin-bottom:8px;'
+        'display:flex;justify-content:space-between;white-space:nowrap;overflow:hidden}'
+        '.fpv-meta b{color:#31333f}'
+        '.fpv-status{height:34px;display:flex;align-items:center;justify-content:center;'
+        'gap:8px;border-radius:6px;font-weight:600;font-size:13px}'
+        '.fpv-st-ok{background:rgba(33,163,102,0.18);color:#157347}'
+        '.fpv-st-bad{background:rgba(224,67,85,0.16);color:#c22f40}'
+        '.fpv-st-none{background:rgba(180,130,0,0.22);color:#7a5800}'
+    )
 
     for i, p in enumerate(passes):
         anchor  = f"card-anchor-{i}"
@@ -41,37 +58,39 @@ def _build_css(passes: list) -> str:
         border_color, bg_color = color_map[p.verified]
 
         # ── Card border ───────────────────────────────────────────────
-        # Innermost stVerticalBlock = the one that contains the anchor but
-        # has NO child stVerticalBlock that also contains the anchor.
+        # Innermost stVerticalBlock = у него контейнер якоря — прямой
+        # ребёнок. Вложенный :has(:has()) невалиден в CSS и молча
+        # отбрасывается браузером, поэтому именно `> …`.
         card_sel = (
-            f'div[data-testid="stVerticalBlock"]:has(span#{anchor})'
-            f':not(:has(div[data-testid="stVerticalBlock"]:has(span#{anchor})))'
+            f'div[data-testid="stVerticalBlock"]'
+            f':has(> div[data-testid="stElementContainer"] span#{anchor})'
         )
         rules.append(
             f'{card_sel}{{'
             f'border:3px solid {border_color}!important;'
             f'background-color:{bg_color}!important;'
-            f'border-radius:8px!important;'
-            f'padding:6px!important;'
+            f'border-radius:10px!important;'
+            f'padding:8px!important;'
             f'margin-bottom:4px!important}}'
         )
 
-        # ── Collapse the marker-span paragraph so it takes no space ──
-        for mid in (ok_mid, bad_mid):
+        # ── Hide marker/anchor element containers entirely ───────────
+        # Даже элемент нулевой высоты занимает слот в flex-gap колонки,
+        # из-за чего кнопки в btn_col1/btn_col2 сползали вниз относительно
+        # btn_col3. display:none убирает элемент из потока полностью
+        # (:has-правила для кнопок и рамки работают и по display:none).
+        for mid in (anchor, ok_mid, bad_mid):
             rules.append(
-                f'div[data-testid="stMarkdownContainer"]:has(span#{mid})'
-                f'{{line-height:0!important;margin:0!important;padding:0!important}}'
-                f'div[data-testid="stMarkdownContainer"]:has(span#{mid}) p'
-                f'{{margin:0!important;padding:0!important;line-height:0!important;'
-                f'height:0!important;overflow:hidden!important}}'
+                f'div[data-testid="stElementContainer"]:has(span#{mid})'
+                f'{{display:none!important}}'
             )
 
         # ── Button colours ────────────────────────────────────────────
         def _btn_rules(mid: str, bg: str, bg_hover: str) -> str:
             # Innermost stVerticalBlock for the button sub-column
             sel = (
-                f'div[data-testid="stVerticalBlock"]:has(span#{mid})'
-                f':not(:has(div[data-testid="stVerticalBlock"]:has(span#{mid})))'
+                f'div[data-testid="stVerticalBlock"]'
+                f':has(> div[data-testid="stElementContainer"] span#{mid})'
                 f' button'
             )
             return (
@@ -81,9 +100,9 @@ def _build_css(passes: list) -> str:
             )
 
         if p.verified is True:
-            rules.append(_btn_rules(ok_mid, "#28a745", "#218838"))
+            rules.append(_btn_rules(ok_mid, "#21a366", "#1b8955"))
         if p.verified is False:
-            rules.append(_btn_rules(bad_mid, "#dc3545", "#c82333"))
+            rules.append(_btn_rules(bad_mid, "#e04355", "#c73648"))
 
     return f'<style>{"".join(rules)}</style>' if rules else ''
 
@@ -240,24 +259,28 @@ def _render_pass_card(
         else:
             st.warning("Кадр недоступен")
 
-        # Pass info
+        # Pass info + status: свои div-ы фиксированной высоты вместо
+        # st.caption/st.success/st.error/st.info — у тех высота зависит от
+        # состояния, из-за чего кнопки «прыгали» (CSS-классы в _build_css).
         t = pass_data.time_sec
         minutes = int(t // 60)
         seconds = t - minutes * 60
         time_str = f"{minutes:02d}:{seconds:05.2f}"
 
-        st.caption(
-            f"**#{pass_idx + 1}** · {time_str}\n\n"
-            f"Сходство: {pass_data.similarity:.3f}"
-        )
-
-        # Status indicator
         if pass_data.verified is True:
-            st.success("✅ Подтверждён", icon=None)
+            status_cls, status_txt = "fpv-st-ok", "✅ Подтверждён"
         elif pass_data.verified is False:
-            st.error("❌ Фейк", icon=None)
+            status_cls, status_txt = "fpv-st-bad", "❌ Фейк"
         else:
-            st.info("⬜ Не проверен", icon=None)
+            status_cls, status_txt = "fpv-st-none", "⬜ Не проверен"
+
+        st.markdown(
+            f'<div class="fpv-meta">'
+            f'<span><b>#{pass_idx + 1}</b> · {time_str}</span>'
+            f'<span>сходство {pass_data.similarity:.3f}</span></div>'
+            f'<div class="fpv-status {status_cls}">{status_txt}</div>',
+            unsafe_allow_html=True,
+        )
 
         # Action buttons — each btn sub-column gets a hidden marker span so
         # CSS can scope the button colour to exactly that column.
