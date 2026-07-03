@@ -628,9 +628,12 @@ with top_cols[1]:
 
 # ── Основной layout: список видео + контент ───────────────────────────────────
 
+_TABS = ["📈 График", "✅ Верификация", "🏆 Круги", "📊 Сравнение"]
+
 list_col, content_col = st.columns([1, 3])
 
-with list_col:
+
+def _video_list_body():
     # Обновляем selected из виджетов
     for i, v in enumerate(videos):
         v["selected"] = st.session_state.get(f"sel_{i}", v["selected"])
@@ -659,11 +662,20 @@ with list_col:
                 st.session_state["frames_cache"].pop(v["path"], None)
             # Запускаем анализ (поток стартует, polling loop подхватит)
             run_batch(selected, cfg, refs)
-            st.rerun()  # войти в polling loop
+            st.rerun()  # войти в polling loop (полный rerun и из фрагмента)
 
     if new_active != st.session_state["active_idx"]:
         st.session_state["active_idx"] = new_active
         st.rerun()
+
+
+with list_col:
+    # На вкладке верификации клики ✅/❌ перерисовывают только фрагмент карточки,
+    # список видео сам о них не узнаёт. Поэтому здесь список — фрагмент с опросом
+    # раз в секунду (только на этой вкладке): бейдж активного видео (круги, ❓N)
+    # обновляется по мере верификации. Данные in-memory, рендер копеечный.
+    _poll = 1.0 if st.session_state.get("main_tab") == _TABS[1] else None
+    st.fragment(_video_list_body, run_every=_poll)()
 
 # Guard: session_state may contain a stale tuple if app reloaded mid-run
 _raw_idx = st.session_state["active_idx"]
@@ -726,12 +738,16 @@ with content_col:
                 on_verified_change(i, False)
         return int((~mask).sum())
 
-    # Вкладки
-    tab_graph, tab_verify, tab_laps, tab_compare = st.tabs(
-        ["📈 График", "✅ Верификация", "🏆 Круги", "📊 Сравнение"]
-    )
+    # Вкладки: st.tabs выполняет тело ВСЕХ вкладок при каждом rerun (клик по
+    # любому виджету пересобирал график Plotly и analyze() по всем видео).
+    # segmented_control + if рендерит только активную; переключение вкладки —
+    # обычный виджет-клик, т.е. полный rerun, поэтому данные всегда свежие.
+    active_tab = st.segmented_control(
+        "Вкладка", _TABS, default=_TABS[0],
+        key="main_tab", label_visibility="collapsed",
+    ) or _TABS[0]  # клик по выбранной вкладке снимает выбор → считаем «График»
 
-    with tab_graph:
+    if active_tab == _TABS[0]:
         render_graph_tab(
             video_path=video_path,
             similarities=sims,
@@ -742,7 +758,7 @@ with content_col:
             on_use_as_ref=on_use_as_ref,
         )
 
-    with tab_verify:
+    elif active_tab == _TABS[1]:
         from core.pass_filter import model_available as _pf_available
         render_verify_tab(
             video_path=video_path,
@@ -753,12 +769,12 @@ with content_col:
             on_smart_filter=on_smart_filter if _pf_available() else None,
         )
 
-    with tab_laps:
+    elif active_tab == _TABS[2]:
         passes_for_lap = project_data_to_passes_from_data(data.passes)
         result = analyze(passes_for_lap, best_ns=[1, cfg["best_n"], 5])
         render_laps_tab(result, cfg["best_n"], active_video["name"])
 
-    with tab_compare:
+    elif active_tab == _TABS[3]:
         all_results = {}
         no_lap_paths = []
         keep_map = {}

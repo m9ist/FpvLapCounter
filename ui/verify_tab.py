@@ -13,102 +13,70 @@ from core.frames import load_frame_cached as _load_frame
 from storage.project import PassData
 
 
-def _build_css(passes: list) -> str:
-    """Build one <style> block with all per-card rules.
+# Мета-строка и статус-плашка фиксированной высоты — кнопки не «прыгают».
+_STATIC_CSS = (
+    '<style>'
+    '.fpv-meta{height:20px;line-height:20px;font-size:13px;color:#55596a;'
+    'margin-bottom:8px;'
+    'display:flex;justify-content:space-between;white-space:nowrap;overflow:hidden}'
+    '.fpv-meta b{color:#31333f}'
+    '.fpv-status{height:34px;display:flex;align-items:center;justify-content:center;'
+    'gap:8px;border-radius:6px;font-weight:600;font-size:13px}'
+    '.fpv-st-ok{background:rgba(33,163,102,0.18);color:#157347}'
+    '.fpv-st-bad{background:rgba(224,67,85,0.16);color:#c22f40}'
+    '.fpv-st-none{background:rgba(180,130,0,0.22);color:#7a5800}'
+    '</style>'
+)
 
-    Card border rule:
-      Target the innermost stVerticalBlock containing the anchor span using
-      :not(:has(child stVerticalBlock that also has the same span)).
+# Дизайн-прототип: dev/verify_proto_v2.html.
+# Фон на всю карточку; рамка одинаковой толщины во всех состояниях
+# (у ok/bad прозрачная), чтобы смена статуса не сдвигала вёрстку.
+# «Не проверен» — контрастный янтарный фон + красная рамка.
+_CARD_COLORS = {
+    True:  ("transparent", "rgba(33,163,102,0.14)"),
+    False: ("transparent", "rgba(224,67,85,0.11)"),
+    None:  ("#e04355", "#ffe08a"),
+}
 
-    Button color rules:
-      Same innermost-stVerticalBlock trick but scoped to each btn sub-column.
-      The marker span is placed inside btn_col1 / btn_col2; its paragraph
-      container is collapsed to zero height so it doesn't affect layout.
+
+def _card_css(i: int, verified: bool | None) -> str:
+    """CSS одной карточки: живёт внутри её фрагмента и обновляется вместе с ним.
+
+    Виджеты с key получают CSS-класс st-key-<key> (Streamlit 1.39+):
+    карточка — st.container(key=f"vcard_{i}"), кнопки — свои key.
+    Правила по простым классам: селекторы :has() здесь недопустимы —
+    браузер пересчитывает их по всему DOM при каждой перерисовке,
+    на ~20 карточках это давало ~1 с на клик.
     """
-    rules: list[str] = []
-
-    # Дизайн-прототип: dev/verify_proto_v2.html.
-    # Фон на всю карточку; рамка одинаковой толщины во всех состояниях
-    # (у ok/bad прозрачная), чтобы смена статуса не сдвигала вёрстку.
-    # «Не проверен» — контрастный янтарный фон + красная рамка.
-    color_map = {
-        True:  ("transparent", "rgba(33,163,102,0.14)"),
-        False: ("transparent", "rgba(224,67,85,0.11)"),
-        None:  ("#e04355", "#ffe08a"),
-    }
-
-    # Мета-строка и статус-плашка фиксированной высоты — кнопки не «прыгают».
-    rules.append(
-        '.fpv-meta{height:20px;line-height:20px;font-size:13px;color:#55596a;'
-        'margin-bottom:8px;'
-        'display:flex;justify-content:space-between;white-space:nowrap;overflow:hidden}'
-        '.fpv-meta b{color:#31333f}'
-        '.fpv-status{height:34px;display:flex;align-items:center;justify-content:center;'
-        'gap:8px;border-radius:6px;font-weight:600;font-size:13px}'
-        '.fpv-st-ok{background:rgba(33,163,102,0.18);color:#157347}'
-        '.fpv-st-bad{background:rgba(224,67,85,0.16);color:#c22f40}'
-        '.fpv-st-none{background:rgba(180,130,0,0.22);color:#7a5800}'
+    border_color, bg_color = _CARD_COLORS[verified]
+    rules = (
+        f'.st-key-vcard_{i}{{'
+        f'border:3px solid {border_color}!important;'
+        f'background-color:{bg_color}!important;'
+        f'border-radius:10px!important;'
+        f'padding:8px!important;'
+        f'margin-bottom:4px!important}}'
     )
 
-    for i, p in enumerate(passes):
-        anchor  = f"card-anchor-{i}"
-        ok_mid  = f"vok-m-{i}"
-        bad_mid = f"vbad-m-{i}"
-
-        border_color, bg_color = color_map[p.verified]
-
-        # ── Card border ───────────────────────────────────────────────
-        # Innermost stVerticalBlock = у него контейнер якоря — прямой
-        # ребёнок. Вложенный :has(:has()) невалиден в CSS и молча
-        # отбрасывается браузером, поэтому именно `> …`.
-        card_sel = (
-            f'div[data-testid="stVerticalBlock"]'
-            f':has(> div[data-testid="stElementContainer"] span#{anchor})'
-        )
-        rules.append(
-            f'{card_sel}{{'
-            f'border:3px solid {border_color}!important;'
-            f'background-color:{bg_color}!important;'
-            f'border-radius:10px!important;'
-            f'padding:8px!important;'
-            f'margin-bottom:4px!important}}'
+    def _btn_rules(key: str, bg: str, bg_hover: str) -> str:
+        sel = f'.st-key-{key} button'
+        return (
+            f'{sel}{{background-color:{bg}!important;'
+            f'border-color:{bg}!important;color:#fff!important}}'
+            f'{sel}:hover{{background-color:{bg_hover}!important}}'
         )
 
-        # ── Hide marker/anchor element containers entirely ───────────
-        # Даже элемент нулевой высоты занимает слот в flex-gap колонки,
-        # из-за чего кнопки в btn_col1/btn_col2 сползали вниз относительно
-        # btn_col3. display:none убирает элемент из потока полностью
-        # (:has-правила для кнопок и рамки работают и по display:none).
-        for mid in (anchor, ok_mid, bad_mid):
-            rules.append(
-                f'div[data-testid="stElementContainer"]:has(span#{mid})'
-                f'{{display:none!important}}'
-            )
+    if verified is True:
+        rules += _btn_rules(f'vok_{i}', "#21a366", "#1b8955")
+    if verified is False:
+        rules += _btn_rules(f'vbad_{i}', "#e04355", "#c73648")
 
-        # ── Button colours ────────────────────────────────────────────
-        def _btn_rules(mid: str, bg: str, bg_hover: str) -> str:
-            # Innermost stVerticalBlock for the button sub-column
-            sel = (
-                f'div[data-testid="stVerticalBlock"]'
-                f':has(> div[data-testid="stElementContainer"] span#{mid})'
-                f' button'
-            )
-            return (
-                f'{sel}{{background-color:{bg}!important;'
-                f'border-color:{bg}!important;color:#fff!important}}'
-                f'{sel}:hover{{background-color:{bg_hover}!important}}'
-            )
-
-        if p.verified is True:
-            rules.append(_btn_rules(ok_mid, "#21a366", "#1b8955"))
-        if p.verified is False:
-            rules.append(_btn_rules(bad_mid, "#e04355", "#c73648"))
-
-    return f'<style>{"".join(rules)}</style>' if rules else ''
+    return f'<style>{rules}</style>'
 
 
 
 
+@st.fragment
 def render_verify_tab(
     video_path: str,
     passes: list[PassData],
@@ -120,6 +88,11 @@ def render_verify_tab(
     """
     Render a verification grid for all detected gate pass candidates.
 
+    Вся вкладка — st.fragment: клики ✅/❌ перезапускают только её
+    (st.rerun(scope="fragment")), а не весь app.py. Остальной интерфейс
+    (список видео, другие вкладки) обновится при следующем полном rerun —
+    например, при переключении вкладки.
+
     Parameters
     ----------
     video_path         : Absolute path to the video file.
@@ -128,9 +101,9 @@ def render_verify_tab(
     on_verified_change : Callback(pass_idx, True|False|None) when user changes status.
     on_use_as_ref      : Callback(bgr_frame) when user wants to use frame as reference.
     """
-    # Inject all CSS in a single top-level call (before any columns).
+    # Inject static CSS in a single top-level call (before any columns).
     # Style tags placed inside st.columns() can behave inconsistently.
-    st.markdown(_build_css(passes), unsafe_allow_html=True)
+    st.markdown(_STATIC_CSS, unsafe_allow_html=True)
 
     # ── Floating scroll buttons ────────────────────────────────────────
     # st.markdown innerHTML never executes <script> tags (browser security).
@@ -182,31 +155,37 @@ def render_verify_tab(
         return
 
     # ── Bulk action buttons ────────────────────────────────────────────
+    # on_click-колбэки выполняются ДО перерисовки фрагмента — статусы уже
+    # новые к моменту рендера, и второй прогон (st.rerun) не нужен.
+    def _set_all(value: bool | None) -> None:
+        for i in range(len(passes)):
+            on_verified_change(i, value)
+
+    def _fake_unverified() -> None:
+        for i, p in enumerate(passes):
+            if p.verified is None:
+                on_verified_change(i, False)
+
+    def _smart() -> None:
+        res = on_smart_filter()
+        if res is not None:
+            st.toast(f"🧠 Помечено фейком: {res}")
+
     cols = st.columns(4 if on_smart_filter else 3)
     with cols[0]:
-        if st.button("✅ Подтвердить все", key="verify_all_btn", width='stretch'):
-            for i in range(len(passes)):
-                on_verified_change(i, True)
-            st.rerun()
+        st.button("✅ Подтвердить все", key="verify_all_btn", width='stretch',
+                  on_click=_set_all, args=(True,))
     with cols[1]:
-        if st.button("❌ Непроверенные — фейк", key="verify_all_fake_btn", width='stretch'):
-            for i, p in enumerate(passes):
-                if p.verified is None:
-                    on_verified_change(i, False)
-            st.rerun()
+        st.button("❌ Непроверенные — фейк", key="verify_all_fake_btn", width='stretch',
+                  on_click=_fake_unverified)
     with cols[2]:
-        if st.button("🔄 Сбросить верификацию", key="verify_reset_btn", width='stretch'):
-            for i in range(len(passes)):
-                on_verified_change(i, None)
-            st.rerun()
+        st.button("🔄 Сбросить верификацию", key="verify_reset_btn", width='stretch',
+                  on_click=_set_all, args=(None,))
     if on_smart_filter:
         with cols[3]:
-            if st.button("🧠 Умный фильтр", key="verify_smart_btn", width='stretch',
-                         help="Классификатор пометит фейки ❌; остальных не трогает"):
-                res = on_smart_filter()
-                if res is not None:
-                    st.toast(f"🧠 Помечено фейком: {res}")
-                st.rerun()
+            st.button("🧠 Умный фильтр", key="verify_smart_btn", width='stretch',
+                      help="Классификатор пометит фейки ❌; остальных не трогает",
+                      on_click=_smart)
 
     st.markdown(f"**Всего кандидатов: {len(passes)}**")
     st.markdown("---")
@@ -214,48 +193,64 @@ def render_verify_tab(
     # ── Pass grid (3 per row) ──────────────────────────────────────────
     cols_per_row = 3
 
+    # Кеш готовых JPEG-превью: st.image(numpy) заново кодирует в PNG и
+    # хеширует массив при каждом rerun — на 30+ карточках это заметно.
+    thumb_cache: dict = (
+        st.session_state.setdefault("_verify_thumb_cache", {})
+        .setdefault(video_path, {})
+    )
+
     for row_start in range(0, len(passes), cols_per_row):
         row_passes = passes[row_start : row_start + cols_per_row]
         cols = st.columns(cols_per_row)
 
         for col_offset, (col, pass_data) in enumerate(zip(cols, row_passes)):
             pass_idx = row_start + col_offset
-            _render_pass_card(
-                col=col,
-                pass_data=pass_data,
-                pass_idx=pass_idx,
-                video_path=video_path,
-                frames_cache=frames_cache,
-                on_verified_change=on_verified_change,
-                on_use_as_ref=on_use_as_ref,
-            )
+            # Фрагмент вызывается ВНУТРИ with col: — фрагмент не может писать
+            # виджеты в контейнер, созданный снаружи него.
+            with col:
+                _render_pass_card(
+                    pass_data=pass_data,
+                    pass_idx=pass_idx,
+                    video_path=video_path,
+                    frames_cache=frames_cache,
+                    thumb_cache=thumb_cache,
+                    on_verified_change=on_verified_change,
+                    on_use_as_ref=on_use_as_ref,
+                )
 
 
+@st.fragment
 def _render_pass_card(
-    col,
     pass_data: PassData,
     pass_idx: int,
     video_path: str,
     frames_cache: dict,
+    thumb_cache: dict,
     on_verified_change: Callable,
     on_use_as_ref: Callable,
 ) -> None:
-    """Render a single verification card inside a Streamlit column."""
-    with col:
-        # Anchor span — CSS in render_verify_tab targets the stVerticalBlock
-        # that contains this span (and only this span) to draw the card border.
-        anchor_id = f"card-anchor-{pass_idx}"
-        st.markdown(
-            f'<span id="{anchor_id}" style="display:none"></span>',
-            unsafe_allow_html=True,
-        )
+    """Render a single verification card (its own fragment).
 
-        # Thumbnail
-        frame_bgr = _load_frame(video_path, pass_data.frame, frames_cache)
-        if frame_bgr is not None:
-            thumb = cv2.resize(frame_bgr, (224, 126))
-            thumb_rgb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
-            st.image(thumb_rgb, width='stretch')
+    Клик ✅/❌ перерисовывает ТОЛЬКО эту карточку: ререндер всей сетки
+    (~17 карточек одним delta-пакетом) занимал у браузера ~1 с.
+    CSS карточки поэтому встроен в её же markdown (_card_css).
+    """
+    # Контейнер с key даёт класс st-key-vcard_{i} — _card_css красит
+    # фон/рамку карточки по нему.
+    with st.container(key=f"vcard_{pass_idx}"):
+        # Thumbnail: готовые JPEG-байты из кеша (imencode принимает BGR).
+        jpg = thumb_cache.get(pass_data.frame)
+        if jpg is None:
+            frame_bgr = _load_frame(video_path, pass_data.frame, frames_cache)
+            if frame_bgr is not None:
+                thumb = cv2.resize(frame_bgr, (224, 126))
+                ok, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ok:
+                    jpg = buf.tobytes()
+                    thumb_cache[pass_data.frame] = jpg
+        if jpg is not None:
+            st.image(jpg, width='stretch')
         else:
             st.warning("Кадр недоступен")
 
@@ -274,7 +269,10 @@ def _render_pass_card(
         else:
             status_cls, status_txt = "fpv-st-none", "⬜ Не проверен"
 
+        # CSS карточки — в том же markdown-блоке (отдельный элемент занял бы
+        # слот в flex-gap колонки и сдвинул вёрстку).
         st.markdown(
+            _card_css(pass_idx, pass_data.verified) +
             f'<div class="fpv-meta">'
             f'<span><b>#{pass_idx + 1}</b> · {time_str}</span>'
             f'<span>сходство {pass_data.similarity:.3f}</span></div>'
@@ -282,39 +280,31 @@ def _render_pass_card(
             unsafe_allow_html=True,
         )
 
-        # Action buttons — each btn sub-column gets a hidden marker span so
-        # CSS can scope the button colour to exactly that column.
+        # Action buttons — цвет активной кнопки CSS находит по классу
+        # st-key-vok_{i} / st-key-vbad_{i} её контейнера.
         btn_col1, btn_col2, btn_col3 = st.columns(3)
 
         with btn_col1:
-            # Marker for ✅ colour rule; paragraph is collapsed to zero by CSS.
-            st.markdown(
-                f'<span id="vok-m-{pass_idx}" style="display:none"></span>',
-                unsafe_allow_html=True,
-            )
             ok_type = "primary" if pass_data.verified is True else "secondary"
-            if st.button("✅", key=f"vok_{pass_idx}", width='stretch',
-                         type=ok_type, help="Подтвердить пролёт"):
-                new_val = None if pass_data.verified is True else True
-                on_verified_change(pass_idx, new_val)
-                st.rerun()
+            # on_click — см. комментарий у bulk-кнопок: один прогон вместо двух.
+            st.button("✅", key=f"vok_{pass_idx}", width='stretch',
+                      type=ok_type, help="Подтвердить пролёт",
+                      on_click=lambda i=pass_idx, v=pass_data.verified:
+                          on_verified_change(i, None if v is True else True))
 
         with btn_col2:
-            # Marker for ❌ colour rule.
-            st.markdown(
-                f'<span id="vbad-m-{pass_idx}" style="display:none"></span>',
-                unsafe_allow_html=True,
-            )
             bad_type = "primary" if pass_data.verified is False else "secondary"
-            if st.button("❌", key=f"vbad_{pass_idx}", width='stretch',
-                         type=bad_type, help="Отметить как фейк"):
-                new_val = None if pass_data.verified is False else False
-                on_verified_change(pass_idx, new_val)
-                st.rerun()
+            st.button("❌", key=f"vbad_{pass_idx}", width='stretch',
+                      type=bad_type, help="Отметить как фейк",
+                      on_click=lambda i=pass_idx, v=pass_data.verified:
+                          on_verified_change(i, None if v is False else False))
 
         with btn_col3:
             if st.button("🎯", key=f"vref_{pass_idx}", width='stretch',
                          help="Использовать как референс"):
+                # BGR-кадр нужен только здесь — грузим лениво (обычно уже в кеше).
+                # Фидбэк — st.toast в on_use_as_ref; инлайновый st.success ломал
+                # фиксированную высоту карточки.
+                frame_bgr = _load_frame(video_path, pass_data.frame, frames_cache)
                 if frame_bgr is not None:
                     on_use_as_ref(frame_bgr)
-                    st.success("Добавлен как референс")

@@ -10,13 +10,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from utils.logger import setup as _setup_logging
+_setup_logging()
+
 import streamlit as st
 
 from storage import project as proj
 from ui.verify_tab import render_verify_tab
 
 VIDEO = r"K:\disk d\fpv\!video\2026-06-30\20260630-202456.ts"
-N = 9
+N = 999  # все пролёты — как в реальном приложении
 
 st.set_page_config(page_title="Verify tab demo", layout="wide")
 
