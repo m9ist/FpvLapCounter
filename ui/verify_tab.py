@@ -84,6 +84,7 @@ def render_verify_tab(
     on_verified_change: Callable,  # (pass_idx: int, value: bool | None) -> None
     on_use_as_ref: Callable,       # (bgr_frame: np.ndarray) -> None
     on_smart_filter: Callable | None = None,  # () -> n_marked_fake | None
+    on_next_video: Callable | None = None,    # () -> bool (False = файл последний)
 ) -> None:
     """
     Render a verification grid for all detected gate pass candidates.
@@ -100,7 +101,12 @@ def render_verify_tab(
     frames_cache       : Mutable dict {frame_idx: bgr_frame} for caching.
     on_verified_change : Callback(pass_idx, True|False|None) when user changes status.
     on_use_as_ref      : Callback(bgr_frame) when user wants to use frame as reference.
+    on_next_video      : Callback() -> bool — switch to the next video in the list.
     """
+    # Переход к следующему файлу запрошен колбэком кнопки внизу. Смену активного
+    # видео видит только полный прогон app.py, поэтому выходим из фрагмента сразу.
+    if st.session_state.pop("_verify_goto_next", False):
+        st.rerun(scope="app")
     # Inject static CSS in a single top-level call (before any columns).
     # Style tags placed inside st.columns() can behave inconsistently.
     st.markdown(_STATIC_CSS, unsafe_allow_html=True)
@@ -222,6 +228,31 @@ def render_verify_tab(
                     on_verified_change=on_verified_change,
                     on_use_as_ref=on_use_as_ref,
                 )
+
+    # ── Финальная кнопка: закрыть файл и перейти к следующему ──────────
+    if on_next_video is not None:
+        st.markdown("---")
+        n_pending = sum(1 for p in passes if p.verified is None)
+
+        def _fake_unverified_and_next() -> None:
+            _fake_unverified()
+            # Возврат False = файл последний, переходить некуда.
+            if on_next_video():
+                st.session_state["_verify_goto_next"] = True
+            else:
+                st.session_state["_verify_was_last"] = True
+
+        st.button(
+            f"❌➡️ Непроверенные — фейк ({n_pending}) и следующий файл",
+            key="verify_fake_and_next_btn",
+            width='stretch',
+            type="primary",
+            help="Пометить все непроверенные ❌ и открыть следующее видео в списке",
+            on_click=_fake_unverified_and_next,
+        )
+
+        if st.session_state.pop("_verify_was_last", False):
+            st.toast("Это последний файл в папке")
 
 
 @st.fragment

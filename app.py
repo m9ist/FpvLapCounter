@@ -725,6 +725,13 @@ with content_col:
             active_video["lap_count"] = len(data.laps)
             active_video["status"] = "done" if data.laps else "no_laps"
 
+    def on_next_video() -> bool:
+        """Сделать активным следующее видео. False — текущее последнее."""
+        if active_idx + 1 >= len(videos):
+            return False
+        st.session_state["active_idx"] = active_idx + 1
+        return True
+
     def on_smart_filter():
         """Прогнать классификатор по текущим кандидатам и пометить ✅/❌."""
         from core.frames import grab_frames
@@ -768,6 +775,7 @@ with content_col:
             on_verified_change=on_verified_change,
             on_use_as_ref=on_use_as_ref,
             on_smart_filter=on_smart_filter if _pf_available() else None,
+            on_next_video=on_next_video,
         )
 
     elif active_tab == _TABS[2]:
