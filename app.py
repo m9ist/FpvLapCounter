@@ -8,6 +8,7 @@ from utils.logger import setup as _setup_logging
 _setup_logging()
 
 import ctypes
+import logging
 import shutil
 import threading
 
@@ -24,7 +25,8 @@ from storage import project as proj
 from storage.project import ProjectData, PassData, LapData
 from storage.references import RefImage, from_frame, save_ref_to_history
 from storage import model_stats
-from ui.sidebar import render_sidebar, pick_folder_dialog
+from ui.sidebar import render_sidebar
+from core import club
 from ui.video_list import render_video_list
 from ui.graph_tab import render_graph_tab
 from ui.verify_tab import render_verify_tab
@@ -48,6 +50,9 @@ div[data-testid="column"] { padding: 0 4px; }
 
 
 # ── Session state init ─────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
 
 class _StopAnalysis(Exception):
     """Raised inside run_analysis when stop_event is set."""
@@ -112,6 +117,7 @@ def _init_state():
         # ── Club post-session workflow ───────────────────────────────────
         "club_step": None,          # None | "preview" | "transfer"
         "club_source": None,        # source folder path (str)
+        "club_dest": None,          # evening folder path (str)
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -208,17 +214,80 @@ def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage],
     Блокировка сна снимается автоматически по завершении фонового потока.
     """
     _prevent_sleep()
-
-    src_path = Path(source)
     dst_path = Path(dest)
-    dst_path.mkdir(parents=True, exist_ok=True)
+    try:
+        _club_transfer_files(Path(source), dst_path, progress)
+    except Exception as e:
+        # Флешку выдернули, файл занят и т.п. Без сброса шага каждый следующий
+        # прогон снова войдёт в перенос и упадёт — сессия залипнет.
+        logger.error("Перенос «После клуба» %s -> %s прервался", source, dest, exc_info=e)
+        _club_finish()
+        msgs = [("error", f"Перенос прервался: {e}")]
+        if _rmdir_if_empty(dst_path) is False:
+            msgs.append(("warning", f"Пустая папка {dst_path} осталась — удали вручную"))
+        st.session_state["_club_msgs"] = msgs
+        _restore_sleep()
+        return
+    # Перезапуск скрипта посреди переноса (клик по виджету) — это BaseException
+    # Streamlit, сюда он не попадает: шаг остаётся «transfer», и следующий прогон
+    # продолжает перенос с того, что ещё лежит на флешке.
 
-    img_exts = {".jpg", ".jpeg", ".png"}
-    ts_exts  = {".ts", ".mp4", ".avi", ".mov", ".mkv"}
+    _club_finish()
+
+    # Все записи оказались короткими — пустую папку убираем, иначе повторный
+    # перенос в этот день упрётся в «папка вечера уже существует».
+    removed = _rmdir_if_empty(dst_path)
+    if removed is not None:
+        msg = f"Все записи короче {_MIN_CLUB_VIDEO_SEC:.0f} с — удалены с флешки, "
+        msg += (f"папка {dst_path.name} не создана" if removed
+                else f"пустая папка {dst_path} осталась — удали вручную")
+        st.session_state["_club_msgs"] = [("warning", msg)]
+        _restore_sleep()
+        return
+
+    # Обновляем список видео и переключаем папку в сайдбаре на папку вечера
+    st.session_state["videos"] = scan_folder(dest)
+    st.session_state["active_idx"] = 0
+    st.session_state["_last_folder"] = dest
+    st.session_state["_pending_folder"] = dest
+    st.session_state["_club_msgs"] = [("success", f"Записи перенесены в {dest}")]
+
+    # Запускаем анализ (sleep вернётся когда поток закончит)
+    unprocessed = [v for v in st.session_state["videos"] if v["status"] == "new"]
+    if unprocessed and refs:
+        run_batch(unprocessed, cfg, refs, restore_sleep=True)
+    else:
+        _restore_sleep()
+
+
+def _club_finish() -> None:
+    """Выход из режима «После клуба» (шаг подтверждения/переноса)."""
+    st.session_state["club_step"] = None
+    st.session_state["club_source"] = None
+    st.session_state["club_dest"] = None
+
+
+def _rmdir_if_empty(path: Path) -> bool | None:
+    """Удаляет папку, если она пуста. None — не пуста или её нет, True — удалена,
+    False — пуста, но удалить не вышло (держит Проводник/антивирус)."""
+    try:
+        if not path.is_dir() or any(path.iterdir()):
+            return None
+        path.rmdir()
+        return True
+    except OSError as e:
+        logger.warning("Не удалось удалить пустую папку %s", path, exc_info=e)
+        return False
+
+
+def _club_transfer_files(src_path: Path, dst_path: Path, progress) -> None:
+    """Сам перенос: короткие видео удаляет, остальные переносит, картинки удаляет."""
+    # Папку создаёт «Подтвердить»; exist_ok — для продолжения после перезапуска.
+    dst_path.mkdir(exist_ok=True)
 
     all_files = [f for f in src_path.rglob("*") if f.is_file()]
-    video_files = [f for f in all_files if f.suffix.lower() in ts_exts]
-    image_files = [f for f in all_files if f.suffix.lower() in img_exts]
+    video_files = [f for f in all_files if f.suffix.lower() in club.VIDEO_EXTS]
+    image_files = [f for f in all_files if f.suffix.lower() in club.IMAGE_EXTS]
     total = len(video_files) + len(image_files)
     done = 0
 
@@ -250,20 +319,6 @@ def run_club_transfer(source: str, dest: str, cfg: dict, refs: list[RefImage],
 
     if progress:
         progress(total, total, "Готово")
-
-    # Обновляем список видео
-    st.session_state["videos"] = scan_folder(dest)
-    st.session_state["active_idx"] = 0
-    st.session_state["_last_folder"] = dest
-    st.session_state["club_step"] = None
-    st.session_state["club_source"] = None
-
-    # Запускаем анализ (sleep вернётся когда поток закончит)
-    unprocessed = [v for v in st.session_state["videos"] if v["status"] == "new"]
-    if unprocessed and refs:
-        run_batch(unprocessed, cfg, refs, restore_sleep=True)
-    else:
-        _restore_sleep()
 
 
 def run_batch(
@@ -484,36 +539,51 @@ _analysis_running = bool(_shared and _shared.get("running"))
 _club_cols = st.columns([4, 1])
 with _club_cols[1]:
     if st.button("📦 После клуба", width='stretch',
-                 help="Перенести файлы с флешки и запустить анализ"):
-        chosen = pick_folder_dialog()
-        if chosen:
-            st.session_state["club_source"] = chosen
+                 help="Найти флешку HDZero, перенести записи в папку вечера и запустить анализ"):
+        # Во время переноса не перебиваем его: прерванный перенос продолжается
+        # следующим прогоном, а смена шага бросила бы его на полпути.
+        if st.session_state.get("club_step") != "transfer":
             st.session_state["club_step"] = "preview"
-            st.rerun()
+        st.rerun()
+
+# Итог прошлого переноса (показываем один раз после rerun)
+for _lvl, _msg in st.session_state.pop("_club_msgs", []):
+    getattr(st, _lvl)(_msg)
 
 if st.session_state.get("club_step") == "preview":
-    source   = st.session_state.get("club_source", "")
-    dest     = cfg["folder"] or ""
-    src_path = Path(source) if source else None
+    input_dirs = club.find_input_dirs()
+    archive    = cfg["archive"]
+    dest_path  = club.output_dir(archive) if archive else None
+    src_path   = input_dirs[0] if len(input_dirs) == 1 else None
 
-    video_exts = {".ts", ".mp4", ".avi", ".mov", ".mkv"}
-    ts_files = sorted(
-        (f for f in src_path.rglob("*") if f.is_file() and f.suffix.lower() in video_exts),
-        key=lambda f: f.name,
-    ) if src_path else []
-    img_files = sorted(
-        (f for f in src_path.rglob("*")
-         if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png"}),
-        key=lambda f: f.name,
-    ) if src_path else []
+    card_files = [f for f in src_path.rglob("*") if f.is_file()] if src_path else []
+    ts_files = sorted((f for f in card_files if f.suffix.lower() in club.VIDEO_EXTS),
+                      key=lambda f: f.name)
+    img_files = [f for f in card_files if f.suffix.lower() in club.IMAGE_EXTS]
+
+    # Любая из этих проблем — стоп: показываем и блокируем «Подтвердить».
+    errors = []
+    if not input_dirs:
+        errors.append("Флешка HDZero не найдена: ни на одном диске нет папки DCIM\\100HDZRO")
+    elif len(input_dirs) > 1:
+        errors.append("Найдено несколько флешек HDZero: "
+                      + ", ".join(str(d) for d in input_dirs) + ". Оставь одну.")
+    elif not ts_files:
+        errors.append(f"На флешке нет записей: {src_path}")
+    if not archive:
+        errors.append("Укажи папку Архива в боковой панели")
+    elif not Path(archive).is_dir():
+        errors.append(f"Папки Архива нет: {archive}")
+    elif dest_path.exists():
+        errors.append(f"Папка вечера уже существует: {dest_path}")
 
     with st.container(border=True):
         st.markdown("### 📦 Перенос файлов после клуба")
 
         info_cols = st.columns(2)
         with info_cols[0]:
-            st.markdown(f"**Откуда:** `{source or '—'}`")
-            st.markdown(f"**Куда:** `{dest or '—'}`")
+            st.markdown(f"**Откуда:** `{src_path or '—'}`")
+            st.markdown(f"**Куда:** `{dest_path or '—'}`")
         with info_cols[1]:
             st.metric("Видеофайлов", len(ts_files))
             st.metric("Удалить картинок", len(img_files))
@@ -523,8 +593,15 @@ if st.session_state.get("club_step") == "preview":
                 for f in ts_files:
                     st.text(f.name)
 
-        if not dest:
-            st.warning("⚠️ Укажи папку назначения в боковой панели")
+        for err in errors:
+            st.error(err)
+        other_dates = sorted(d for d in club.recording_dates(ts_files)
+                             if dest_path and d.isoformat() != dest_path.name)
+        if other_dates:
+            st.warning(
+                "⚠️ Записи от " + ", ".join(d.isoformat() for d in other_dates)
+                + f", а папка будет {dest_path.name} — переименуй при необходимости"
+            )
         if not refs:
             st.warning("⚠️ Добавь референсные кадры ворот в боковой панели")
         if _analysis_running:
@@ -533,21 +610,31 @@ if st.session_state.get("club_step") == "preview":
         btn_cols = st.columns(2)
         with btn_cols[0]:
             if st.button("❌ Отмена", key="club_cancel", width='stretch'):
-                st.session_state["club_step"] = None
-                st.session_state["club_source"] = None
+                _club_finish()
                 st.rerun()
         with btn_cols[1]:
-            ok = bool(dest and ts_files and refs) and not _analysis_running
+            ok = not errors and bool(refs) and not _analysis_running
             if st.button("✅ Подтвердить", key="club_confirm",
                          type="primary", width='stretch', disabled=not ok):
-                st.session_state["club_step"] = "transfer"
+                try:
+                    # Без exist_ok: папка могла появиться после проверки выше.
+                    dest_path.mkdir()
+                except OSError as e:
+                    logger.warning("Не удалось создать папку вечера %s", dest_path, exc_info=e)
+                    st.session_state["_club_msgs"] = [
+                        ("error", f"Не удалось создать папку вечера {dest_path}: {e}")]
+                    _club_finish()
+                else:
+                    st.session_state["club_source"] = str(src_path)
+                    st.session_state["club_dest"]   = str(dest_path)
+                    st.session_state["club_step"]   = "transfer"
                 st.rerun()
 
 # ── Перенос файлов после клуба (с прогрессом, затем запуск анализа) ──────────
 
 if st.session_state.get("club_step") == "transfer":
     source = st.session_state.get("club_source", "")
-    dest   = cfg["folder"] or ""
+    dest   = st.session_state.get("club_dest", "")
     with st.container(border=True):
         st.markdown("### 📦 Перенос файлов после клуба")
         bar = st.progress(0.0, text="Подготовка…")

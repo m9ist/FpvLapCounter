@@ -14,6 +14,8 @@ from storage.references import (
     save_ref_to_history, load_ref_history,
 )
 
+DEFAULT_ARCHIVE_ROOT = r"D:\media\fpv\!video"
+
 
 def pick_folder_dialog() -> str | None:
     """Open a folder picker by spawning a child Python process with tkinter.
@@ -61,7 +63,7 @@ def render_sidebar() -> dict:
     Returns
     -------
     dict with keys:
-        folder, model_key, device, threshold, min_lap_sec, sample_every,
+        folder, archive, model_key, device, threshold, min_lap_sec, sample_every,
         prominence, best_n, smart_filter, refs
     """
     # Initialise session state on first run
@@ -69,6 +71,14 @@ def render_sidebar() -> dict:
         st.session_state["sidebar_refs"] = []
     if "_sidebar_folder_input" not in st.session_state:
         st.session_state["_sidebar_folder_input"] = ""
+    # Папку может подменить «После клуба» — применяем до отрисовки виджета,
+    # после неё менять ключ виджета в том же прогоне Streamlit не даёт.
+    if "_pending_folder" in st.session_state:
+        st.session_state["_sidebar_folder_input"] = st.session_state.pop("_pending_folder")
+    if "sidebar_archive" not in st.session_state:
+        st.session_state["sidebar_archive"] = model_stats.load_setting(
+            "archive_root", DEFAULT_ARCHIVE_ROOT
+        )
     if "sidebar_model_key" not in st.session_state:
         st.session_state["sidebar_model_key"] = model_stats.load_last_model() or DEFAULT_MODEL
     if "available_devices" not in st.session_state:
@@ -116,6 +126,15 @@ def render_sidebar() -> dict:
             key="_sidebar_folder_input",
             label_visibility="collapsed",
             placeholder="C:\\Videos\\FPV",
+        )
+
+        st.text_input(
+            "📦 Архив (После клуба)",
+            key="sidebar_archive",
+            help="Папка, в которой «После клуба» создаёт папку вечера ГГГГ-ММ-ДД",
+            on_change=lambda: model_stats.save_setting(
+                "archive_root", st.session_state["sidebar_archive"].strip()
+            ),
         )
 
         st.markdown("---")
@@ -345,6 +364,7 @@ def render_sidebar() -> dict:
 
     return {
         "folder": st.session_state.get("_sidebar_folder_input") or None,
+        "archive": st.session_state["sidebar_archive"].strip(),
         "model_key": st.session_state["sidebar_model_key"],
         "device": st.session_state["sidebar_device"],
         "threshold": st.session_state["sidebar_threshold"],
